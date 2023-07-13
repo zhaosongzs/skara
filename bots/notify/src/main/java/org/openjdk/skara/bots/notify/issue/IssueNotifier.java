@@ -88,6 +88,8 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
     // Lazy loaded
     private CensusInstance census = null;
 
+    private boolean backportCreated = false;
+
     IssueNotifier(IssueProject issueProject, boolean reviewLink, URI reviewIcon, boolean commitLink, URI commitIcon,
                   boolean setFixVersion, LinkedHashMap<Pattern, String> fixVersions, LinkedHashMap<Pattern, List<Pattern>> altFixVersions,
                   JbsBackport jbsBackport, boolean prOnly, boolean repoOnly, String buildName,
@@ -537,5 +539,13 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
     @Override
     public boolean idempotent() {
         return true;
+    }
+
+    @Override
+    public void onNewPullRequest(PullRequest pr, Path scratchPath) {
+        if (!backportCreated && pr.title().contains("Test Create Backport")) {
+            var issue = issueProject.issue("8311700");
+            jbsBackport.createBackport(issue.get(), "22", null, null);
+        }
     }
 }
