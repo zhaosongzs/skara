@@ -546,6 +546,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
         if (!backportCreated && pr.title().contains("Test Create Backport")) {
             var issue = issueProject.issue("8312126");
             jbsBackport.createBackport(issue.get(), "22", null, null);
+            backportCreated = true;
         }
     }
 }
