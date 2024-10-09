@@ -41,6 +41,7 @@ public class JiraProject implements IssueProject {
 
     private final JiraHost jiraHost;
     private final String projectName;
+    private final String hostName;
     private final RestRequest request;
 
     private JSONObject projectMetadataCache = null;
@@ -51,10 +52,11 @@ public class JiraProject implements IssueProject {
 
     private final Logger log = Logger.getLogger("org.openjdk.skara.issuetracker.jira");
 
-    JiraProject(JiraHost host, RestRequest request, String projectName) {
+    JiraProject(JiraHost host, RestRequest request, String projectName, String hostName) {
         this.jiraHost = host;
         this.projectName = projectName;
         this.request = request;
+        this.hostName = hostName;
     }
 
     private JSONObject project() {
@@ -536,5 +538,10 @@ public class JiraProject implements IssueProject {
     @Override
     public String name() {
         return projectName.toUpperCase();
+    }
+
+    @Override
+    public String fullName() {
+        return hostName.toUpperCase() + "/" + projectName.toUpperCase();
     }
 }

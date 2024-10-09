@@ -223,7 +223,7 @@ public class BotRunnerConfiguration {
                 throw new ConfigurationError("Issue project entry " + entry + " uses undefined host '" + hostName + "'");
             }
             var issueProjectName = entry.substring(hostSeparatorIndex + 1);
-            return host.project(issueProjectName);
+            return host.project(issueProjectName, hostName);
         } else {
             throw new ConfigurationError("Malformed issue project entry");
         }

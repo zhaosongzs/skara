@@ -62,7 +62,11 @@ public interface IssueTracker extends Host {
         }
     }
 
-    IssueProject project(String name);
+    IssueProject project(String name, String hostName);
+
+    default IssueProject project(String name) {
+        return project(name, "");
+    }
     Optional<CustomEndpoint> lookupCustomEndpoint(String path);
     URI uri();
 

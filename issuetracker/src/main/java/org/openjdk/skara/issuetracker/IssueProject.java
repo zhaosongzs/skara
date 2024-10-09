@@ -41,6 +41,9 @@ public interface IssueProject {
      */
     List<IssueTrackerIssue> issues(ZonedDateTime updatedAfter);
     String name();
+    default String fullName(){
+        return name();
+    };
 
     /**
      * Get the JEP issue according to the JEP ID.

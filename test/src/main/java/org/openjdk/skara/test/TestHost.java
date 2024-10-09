@@ -234,7 +234,7 @@ public class TestHost implements Forge, IssueTracker {
     }
 
     @Override
-    public IssueProject project(String name) {
+    public IssueProject project(String name, String hostName) {
         if (data.issueProjects.containsKey(name)) {
             return data.issueProjects.get(name);
         } else {

@@ -167,8 +167,8 @@ public class JiraHost implements IssueTracker {
     }
 
     @Override
-    public IssueProject project(String name) {
-        return new JiraProject(this, request, name);
+    public IssueProject project(String name, String hostName) {
+        return new JiraProject(this, request, name, hostName);
     }
 
     @Override

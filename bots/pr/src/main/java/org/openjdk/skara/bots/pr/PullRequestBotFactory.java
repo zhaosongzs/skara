@@ -160,12 +160,12 @@ public class PullRequestBotFactory implements BotFactory {
             }
             IssueProject issueProject = null;
             if (repo.value().contains("issues")) {
-                issueProject = issueProjectMap.computeIfAbsent(repo.value().get("issues").asString(), configuration::issueProject);
+                issueProject = issueProjectMap.computeIfAbsent(repo.value().get("issues").asString().toUpperCase(), configuration::issueProject);
                 botBuilder.issueProject(issueProject);
-                repositories.putIfAbsent(issueProject.name(), new ArrayList<>());
-                repositories.get(issueProject.name()).add(repository);
-                issueProjectToIssuePRMapMap.putIfAbsent(issueProject.name(), new ConcurrentHashMap<>());
-                botBuilder.issuePRMap(issueProjectToIssuePRMapMap.get(issueProject.name()));
+                repositories.putIfAbsent(issueProject.fullName(), new ArrayList<>());
+                repositories.get(issueProject.fullName()).add(repository);
+                issueProjectToIssuePRMapMap.putIfAbsent(issueProject.fullName(), new ConcurrentHashMap<>());
+                botBuilder.issuePRMap(issueProjectToIssuePRMapMap.get(issueProject.fullName()));
             }
             if (repo.value().contains("useStaleReviews")) {
                 botBuilder.useStaleReviews(repo.value().get("useStaleReviews").asBoolean());
@@ -190,8 +190,8 @@ public class PullRequestBotFactory implements BotFactory {
                 var enableCsr = repo.value().get("csr").asBoolean();
                 botBuilder.enableCsr(enableCsr);
                 if (enableCsr && issueProject != null) {
-                    repositoriesForCSR.putIfAbsent(issueProject.name(), new ArrayList<>());
-                    repositoriesForCSR.get(issueProject.name()).add(repository);
+                    repositoriesForCSR.putIfAbsent(issueProject.fullName(), new ArrayList<>());
+                    repositoriesForCSR.get(issueProject.fullName()).add(repository);
                 }
             }
             if (repo.value().contains("jep")) {
