@@ -576,6 +576,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
 
     @Override
     public void onNewPullRequest(PullRequest pr, Path scratchPath) {
+        log.info("PR title:" + pr.title());
         if (!backportCreated && pr.title().contains("Test SKARA")) {
             log.info("Preparing to create backport");
             var issue = issueProject.issue("8361435");
