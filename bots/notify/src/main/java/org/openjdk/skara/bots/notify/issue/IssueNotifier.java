@@ -576,8 +576,8 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
 
     @Override
     public void onNewPullRequest(PullRequest pr, Path scratchPath) {
-        if (!backportCreated && pr.title().contains("Test Create Backport")) {
-            var issue = issueProject.issue("8312128");
+        if (!backportCreated && pr.title().contains("Test SKARA")) {
+            var issue = issueProject.issue("8361435");
             Backports.createBackport(issue.get(), "22", null, null);
             backportCreated = true;
         }
