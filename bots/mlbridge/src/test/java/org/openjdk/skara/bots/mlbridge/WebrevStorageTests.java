@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,13 @@ package org.openjdk.skara.bots.mlbridge;
 
 import org.openjdk.skara.email.EmailAddress;
 import org.openjdk.skara.forge.HostedRepository;
+import org.openjdk.skara.forge.HostedRepositoryPool;
 import org.openjdk.skara.test.*;
 import org.openjdk.skara.vcs.*;
 
 import org.junit.jupiter.api.*;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.UUID;
 
@@ -69,8 +69,10 @@ class WebrevStorageTests {
 
             var prFolder = tempFolder.path().resolve("pr");
             var prRepo = Repository.materialize(prFolder, pr.repository().authenticatedUrl(), "edit");
-            var scratchFolder = tempFolder.path().resolve("scratch");
-            var generator = storage.generator(pr, prRepo, scratchFolder);
+            var jsonScratchFolder = tempFolder.path().resolve("scratch").resolve("json");
+            var htmlScratchFolder = tempFolder.path().resolve("scratch").resolve("html");
+            var seedPath = tempFolder.path().resolve("seed");
+            var generator = storage.generator(pr, prRepo, jsonScratchFolder, htmlScratchFolder, new HostedRepositoryPool(seedPath));
             generator.generate(masterHash, editHash, "00", WebrevDescription.Type.FULL);
 
             // Check that the web link has been verified now and followed the redirect
@@ -122,8 +124,10 @@ class WebrevStorageTests {
 
             var prFolder = tempFolder.path().resolve("pr");
             var prRepo = Repository.materialize(prFolder, pr.repository().authenticatedUrl(), "edit");
-            var scratchFolder = tempFolder.path().resolve("scratch");
-            var generator = storage.generator(pr, prRepo, scratchFolder);
+            var jsonScratchFolder = tempFolder.path().resolve("scratch").resolve("json");
+            var htmlScratchFolder = tempFolder.path().resolve("scratch").resolve("html");
+            var seedPath = tempFolder.path().resolve("seed");
+            var generator = storage.generator(pr, prRepo, jsonScratchFolder, htmlScratchFolder, new HostedRepositoryPool(seedPath));
             generator.generate(masterHash, editHash, "00", WebrevDescription.Type.FULL);
 
             // Update the local repository and check that the webrev has been generated
@@ -160,7 +164,7 @@ class WebrevStorageTests {
 
                 try {
                     var repo = Repository.materialize(scratchPath, archive.authenticatedUrl(), ref);
-                    Files.writeString(repo.root().resolve("intercept.txt"), UUID.randomUUID().toString(), StandardCharsets.UTF_8);
+                    Files.writeString(repo.root().resolve("intercept.txt"), UUID.randomUUID().toString());
                     repo.add(repo.root().resolve("intercept.txt"));
                     var commit = repo.commit("Concurrent unrelated commit", "duke", "duke@openjdk.org");
                     repo.push(commit, archive.authenticatedUrl(), ref);
@@ -205,9 +209,11 @@ class WebrevStorageTests {
 
             var prFolder = tempFolder.path().resolve("pr");
             var prRepo = Repository.materialize(prFolder, pr.repository().authenticatedUrl(), "edit");
-            var scratchFolder = tempFolder.path().resolve("scratch");
-            var generatorProgressMarker = scratchFolder.resolve("test/" + pr.id() + "/00/nanoduke.ico");
-            var generator = storage.generator(pr, prRepo, scratchFolder);
+            var jsonScratchFolder = tempFolder.path().resolve("scratch").resolve("json");
+            var htmlScratchFolder = tempFolder.path().resolve("scratch").resolve("html");
+            var generatorProgressMarker = htmlScratchFolder.resolve("test/" + pr.id() + "/00/nanoduke.ico");
+            var seedPath = tempFolder.path().resolve("seed");
+            var generator = storage.generator(pr, prRepo, jsonScratchFolder, htmlScratchFolder, new HostedRepositoryPool(seedPath));
 
             // Commit something during generation
             var interceptFolder = tempFolder.path().resolve("intercept");

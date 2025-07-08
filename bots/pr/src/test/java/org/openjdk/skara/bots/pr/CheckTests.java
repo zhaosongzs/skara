@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,11 @@ import org.openjdk.skara.issuetracker.Issue;
 import org.openjdk.skara.issuetracker.Link;
 import org.openjdk.skara.json.JSON;
 import org.openjdk.skara.test.*;
+import org.openjdk.skara.vcs.Branch;
+import org.openjdk.skara.vcs.Repository;
+import org.openjdk.skara.vcs.git.GitVersion;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.*;
@@ -42,6 +44,8 @@ import static org.openjdk.skara.bots.common.PullRequestConstants.WEBREV_COMMENT_
 import static org.openjdk.skara.bots.pr.CheckWorkItem.FORCE_PUSH_MARKER;
 import static org.openjdk.skara.bots.pr.CheckWorkItem.FORCE_PUSH_SUGGESTION;
 import static org.openjdk.skara.issuetracker.jira.JiraProject.JEP_NUMBER;
+import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertFirstCommentContains;
+import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertLastCommentContains;
 
 class CheckTests {
     @Test
@@ -96,11 +100,26 @@ class CheckTests {
             checks = pr.checks(editHash);
             assertEquals(1, checks.size());
             check = checks.get("jcheck");
+            var checkStartTime1 = check.startedAt();
             assertEquals(CheckStatus.SUCCESS, check.status());
 
             // The PR should now be ready
             assertTrue(pr.store().labelNames().contains("ready"));
             assertTrue(pr.store().body().contains("https://census.com/integrationreviewer2-profile"));
+
+            // Issue "touch" command
+            approvalPr.addComment("/touch");
+            TestBotRunner.runPeriodicItems(checkBot);
+            check = pr.checks(editHash).get("jcheck");
+            var checkStartTime2 = check.startedAt();
+            assertNotEquals(checkStartTime1, checkStartTime2);
+
+            // Issue "keepalive"
+            approvalPr.addComment("/keepalive");
+            TestBotRunner.runPeriodicItems(checkBot);
+            check = pr.checks(editHash).get("jcheck");
+            var checkStartTime3 = check.startedAt();
+            assertNotEquals(checkStartTime2, checkStartTime3);
         }
     }
 
@@ -174,6 +193,7 @@ class CheckTests {
 
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
+            var nonRecognizedReviewer = credentials.getHostedRepository();
             var commenter = credentials.getHostedRepository();
 
             var censusBuilder = credentials.getCensusBuilder()
@@ -200,10 +220,15 @@ class CheckTests {
             // Approve it
             var reviewerPr = reviewer.pullRequest(authorPr.id());
             reviewerPr.addReview(Review.Verdict.APPROVED, "Reviewers");
+            var nonRecognizedReviewerPr = nonRecognizedReviewer.pullRequest(authorPr.id());
+            nonRecognizedReviewerPr.addReview(Review.Verdict.APPROVED, "");
             TestBotRunner.runPeriodicItems(checkBot);
+            assertFalse(authorPr.store().body().contains("Re-review required"));
+            assertFalse(authorPr.store().body().contains("Review applies to"));
 
             // Check that it has been approved
             assertTrue(authorPr.store().body().contains("Reviewers"));
+            assertTrue(authorPr.store().body().contains("Reviewers without OpenJDK IDs"));
 
             // Update the file after approval
             editHash = CheckableRepository.appendAndCommit(localRepo, "Now I've gone and changed it");
@@ -216,10 +241,12 @@ class CheckTests {
 
             // Now we can approve it again
             reviewerPr.addReview(Review.Verdict.APPROVED, "Approved");
+            nonRecognizedReviewerPr.addReview(Review.Verdict.DISAPPROVED, "Disapprove");
             TestBotRunner.runPeriodicItems(checkBot);
 
             // Check that it has been approved (once) and is no longer stale
             assertTrue(authorPr.store().body().contains("Reviewers"));
+            assertFalse(authorPr.store().body().contains("Reviewers without OpenJDK IDs"));
             assertEquals(1, authorPr.store().body().split("Generated Reviewer", -1).length - 1);
             assertTrue(authorPr.reviews().size() >= 1);
             assertFalse(authorPr.store().body().contains("Note"));
@@ -619,13 +646,16 @@ class CheckTests {
             localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
 
             // Make a change with a corresponding PR
-            Files.writeString(tempFolder.path().resolve("executable.exe"), "Executable file contents", StandardCharsets.UTF_8);
-            Files.setPosixFilePermissions(tempFolder.path().resolve("executable.exe"), Set.of(PosixFilePermission.OWNER_EXECUTE, PosixFilePermission.OWNER_READ));
-            localRepo.add(Path.of("executable.exe"));
+            Files.writeString(tempFolder.path().resolve("executable1.exe"), "Executable file contents");
+            Files.setPosixFilePermissions(tempFolder.path().resolve("executable1.exe"), Set.of(PosixFilePermission.OWNER_EXECUTE, PosixFilePermission.OWNER_READ));
+            localRepo.add(Path.of("executable1.exe"));
+            Files.writeString(tempFolder.path().resolve("executable2.exe"), "Executable file contents");
+            Files.setPosixFilePermissions(tempFolder.path().resolve("executable2.exe"), Set.of(PosixFilePermission.OWNER_EXECUTE, PosixFilePermission.OWNER_READ));
+            localRepo.add(Path.of("executable2.exe"));
             var editHash = localRepo.commit("Make it executable", "duke", "duke@openjdk.org");
             localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
             var pr = credentials.createPullRequest(author, "master", "edit", "Another PR");
-            pr.setBody("This should now be ready");
+            pr.setBody("This should not be ready");
 
             // Check the status
             TestBotRunner.runPeriodicItems(checkBot);
@@ -635,19 +665,23 @@ class CheckTests {
             assertEquals(1, checks.size());
             var check = checks.get("jcheck");
             assertEquals(CheckStatus.FAILURE, check.status());
-            assertTrue(check.summary().orElseThrow().contains("Executable files are not allowed (file: executable.exe)"));
+            assertTrue(check.summary().orElseThrow().contains("Executable files are not allowed (file: executable1.exe)"));
+            assertTrue(check.summary().orElseThrow().contains("Executable files are not allowed (file: executable2.exe)"));
 
             // Additional errors should be displayed in the body
             assertTrue(pr.store().body().contains("## Error"));
-            assertTrue(pr.store().body().contains("Executable files are not allowed (file: executable.exe)"));
+            assertTrue(pr.store().body().contains("Executable files are not allowed (file: executable1.exe)"));
+            assertTrue(pr.store().body().contains("Executable files are not allowed (file: executable2.exe)"));
 
             // The PR should not yet be ready for review
             assertFalse(pr.store().labelNames().contains("rfr"));
             assertFalse(pr.store().labelNames().contains("ready"));
 
             // Drop that error
-            Files.setPosixFilePermissions(tempFolder.path().resolve("executable.exe"), Set.of(PosixFilePermission.OWNER_READ));
-            localRepo.add(Path.of("executable.exe"));
+            Files.setPosixFilePermissions(tempFolder.path().resolve("executable1.exe"), Set.of(PosixFilePermission.OWNER_READ));
+            localRepo.add(Path.of("executable1.exe"));
+            Files.setPosixFilePermissions(tempFolder.path().resolve("executable2.exe"), Set.of(PosixFilePermission.OWNER_READ));
+            localRepo.add(Path.of("executable2.exe"));
             var updatedHash = localRepo.commit("Make it unexecutable", "duke", "duke@openjdk.org");
             localRepo.push(updatedHash, author.authenticatedUrl(), "edit");
             TestBotRunner.runPeriodicItems(checkBot);
@@ -854,7 +888,7 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The PR title should contain the issue title without trailing space
-            assertEquals("TEST-2: My second issue ending in space", prCutOff2.store().title());
+            assertEquals("2: My second issue ending in space", prCutOff2.store().title());
         }
     }
 
@@ -1073,9 +1107,9 @@ class CheckTests {
 
             // Set the version to 17
             localRepo.checkout(localRepo.defaultBranch());
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("project=test", "project=test\nversion=17");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             var confHash = localRepo.commit("Set version as 17", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -1404,14 +1438,14 @@ class CheckTests {
 
             // Break the jcheck configuration on the "edit" branch
             var confPath = tempFolder.path().resolve(".jcheck/conf");
-            Files.writeString(confPath, "Hello there!", StandardCharsets.UTF_8);
+            Files.writeString(confPath, "Hello there!");
             localRepo.add(confPath);
             var editHash = CheckableRepository.appendAndCommit(localRepo, "A change");
             localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
             var pr = credentials.createPullRequest(author, "master", "edit",
                                                    "This is a pull request", true);
 
-            // Check the status - should throw because in edit hash, .jcheck/conf is updated and it will trigger second jcheck
+            // Check the status - should throw because in edit hash, .jcheck/conf is updated and it will trigger source jcheck
             assertThrows(RuntimeException.class, () -> TestBotRunner.runPeriodicItems(checkBot));
             assertThrows(RuntimeException.class, () -> TestBotRunner.runPeriodicItems(checkBot));
             assertThrows(RuntimeException.class, () -> TestBotRunner.runPeriodicItems(checkBot));
@@ -1422,7 +1456,7 @@ class CheckTests {
             var check = checks.get("jcheck");
             assertEquals(CheckStatus.FAILURE, check.status());
             assertEquals("line 0: entry must be of form 'key = value'", check.summary().get());
-            assertEquals("Exception occurred during second jcheck - the operation will be retried", check.title().get());
+            assertEquals("Exception occurred during source jcheck - the operation will be retried", check.title().get());
         }
     }
 
@@ -1502,17 +1536,22 @@ class CheckTests {
     }
 
     @Test
-    void ignoreStale(TestInfo testInfo) throws IOException {
+    void useStaleReviews(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory()) {
 
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
+            var reviewer2 = credentials.getHostedRepository();
+            var reviewer3 = credentials.getHostedRepository();
 
             var censusBuilder = credentials.getCensusBuilder()
-                                           .addAuthor(author.forge().currentUser().id())
-                                           .addReviewer(reviewer.forge().currentUser().id());
-            var checkBot = PullRequestBot.newBuilder().repo(author).censusRepo(censusBuilder.build()).ignoreStaleReviews(true).build();
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id())
+                    .addReviewer(reviewer2.forge().currentUser().id())
+                    .addReviewer(reviewer3.forge().currentUser().id());
+
+            var checkBot = PullRequestBot.newBuilder().repo(author).censusRepo(censusBuilder.build()).useStaleReviews(false).build();
 
             // Populate the projects repository
             var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
@@ -1527,9 +1566,13 @@ class CheckTests {
             // Check the status
             TestBotRunner.runPeriodicItems(checkBot);
 
-            // Approve it as another user
             var approvalPr = reviewer.pullRequest(pr.id());
+            var approvalPr2 = reviewer2.pullRequest(pr.id());
+            var approvalPr3 = reviewer3.pullRequest(pr.id());
+
+            // Approve it as another user
             approvalPr.addReview(Review.Verdict.APPROVED, "Approved");
+            approvalPr2.addReview(Review.Verdict.APPROVED, "Approved");
 
             // Check the status
             TestBotRunner.runPeriodicItems(checkBot);
@@ -1537,6 +1580,7 @@ class CheckTests {
             // The PR should be flagged as ready
             assertTrue(pr.store().labelNames().contains("ready"));
             assertFalse(pr.store().body().contains("Re-review required"));
+            assertFalse(pr.store().body().contains("Review applies to"));
 
             // Add another commit
             editHash = CheckableRepository.replaceAndCommit(localRepo, "Another line");
@@ -1545,13 +1589,20 @@ class CheckTests {
             // Check the status again
             TestBotRunner.runPeriodicItems(checkBot);
 
-            // The PR should no longer be ready, as the review is stale
+            // The PR should no longer be ready, as the reviews are stale
             assertFalse(pr.store().labelNames().contains("ready"));
             assertTrue(pr.store().labelNames().contains("rfr"));
-            assertTrue(pr.store().body().contains("Re-review required"));
+            assertTrue(pr.store().body().contains("🔄 Re-review required"));
 
-            // Approve again
+            // Approve again by reviewer1
             approvalPr.addReview(Review.Verdict.APPROVED, "Approved again");
+
+            // Check the status again
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertFalse(pr.store().body().contains("Re-review required"));
+            assertFalse(pr.store().body().contains("⚠️ Review applies to"));
+            assertTrue(pr.store().body().contains("Review applies to"));
 
             // Change the target ref of the PR
             localRepo.push(masterHash, author.authenticatedUrl(), "other-branch", true);
@@ -1563,17 +1614,19 @@ class CheckTests {
             // The PR should no longer be ready, as the review is stale
             assertFalse(pr.store().labelNames().contains("ready"));
             assertTrue(pr.store().labelNames().contains("rfr"));
-            assertTrue(pr.store().body().contains("Re-review required"));
+            assertTrue(pr.store().body().contains("🔄 Re-review required"));
 
             // Approve yet again
             approvalPr.addReview(Review.Verdict.APPROVED, "Approved again");
+            approvalPr3.addReview(Review.Verdict.APPROVED, "Approved when target ref is other-branch");
 
             // Check the status again
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The PR should be flagged as ready
             assertTrue(pr.store().labelNames().contains("ready"));
-            assertFalse(pr.store().body().contains("Re-review required"));
+            assertFalse(pr.store().body().contains("🔄 Re-review required"));
+            assertTrue(pr.store().body().contains("Review was made when pull request targeted"));
 
             // Change target ref back to the original branch
             pr.setTargetRef("master");
@@ -1583,7 +1636,283 @@ class CheckTests {
 
             // The PR should be flagged as ready, since the old review with that target is now valid again
             assertTrue(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("Review applies to"));
+            assertTrue(pr.store().body().contains("Review was made when pull request targeted"));
+            // Credit line should include reviewers with stale reviews
+            assertLastCommentContains(pr, "Reviewed-by: integrationreviewer2, integrationreviewer3, integrationreviewer4");
+        }
+    }
+
+    @Test
+    void acceptSimpleMerges(TestInfo testInfo) throws IOException {
+        var v = GitVersion.get();
+        Assumptions.assumeTrue(v.major() > 2 || (v.major() == 2 && v.minor() >= 36), v.toString());
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+
+            var checkBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .useStaleReviews(false)
+                    .acceptSimpleMerges(true)
+                    .build();
+
+            // create the repo using CheckableRepository, as it creates probably useful files, such as .jcheck/conf
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            // replace the default file with a bigger file for auto-merging purposes
+            localRepo.checkout(new Branch("master"));
+            Path f = localRepo.root().resolve("file.txt");
+            Files.writeString(f, """
+                    0
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    c
+                    d
+                    e
+                    f
+                    """);
+            localRepo.add(f);
+            var masterHash = localRepo.commit("master 1", author.name(), "someone@example.com");
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+            localRepo.branch(masterHash, "feature");
+            localRepo.checkout(new Branch("feature"));
+            Files.writeString(f, """
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    c
+                    d
+                    e
+                    f
+                    """);
+            localRepo.add(f);
+            var featureHash = localRepo.commit("feature 1", author.name(), "author@example.com");
+            localRepo.push(featureHash, author.authenticatedUrl(), "feature", true);
+            var pr = credentials.createPullRequest(author, "master", "feature", "This is a pull request");
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertFalse(pr.store().labelNames().contains("ready"));
+
+            var approvalPr = reviewer.pullRequest(pr.id());
+            approvalPr.addReview(Review.Verdict.APPROVED, "Approved");
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
             assertFalse(pr.store().body().contains("Re-review required"));
+            assertFalse(pr.store().body().contains("Review applies to"));
+
+            localRepo.checkout(new Branch("master"));
+            Files.writeString(f, """
+                    0
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    c
+                    d
+                    e
+                    """);
+            localRepo.add(f);
+            masterHash = localRepo.commit("master 2", author.name(), "someone@example.com");
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains("Re-review required"));
+            assertFalse(pr.store().body().contains("Review applies to"));
+
+            localRepo.checkout(new Branch("feature"));
+            localRepo.merge(new Branch("master"));
+            localRepo.add(f);
+            var mergeHash = localRepo.commit("Updated from master", author.name(), "author@example.com");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "feature", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains(" ⚠️ Review applies to"));
+            assertTrue(pr.store().body().contains("Review applies to"));
+
+            localRepo.checkout(new Branch("master"));
+            Files.writeString(f, """
+                    0
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    c
+                    d
+                    """);
+            localRepo.add(f);
+            masterHash = localRepo.commit("master 3", author.name(), "someone@example.com");
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains(" ⚠️ Review applies to"));
+            assertTrue(pr.store().body().contains("Review applies to"));
+
+            localRepo.checkout(new Branch("feature"));
+            Files.writeString(f, """
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    c
+                    d
+                    e
+                    """);
+            localRepo.add(f);
+            featureHash = localRepo.commit("feature 2", author.name(), "author@example.com");
+            localRepo.push(featureHash, author.authenticatedUrl(), "feature", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains("Review applies to"));
+            assertTrue(pr.store().body().contains(" 🔄 Re-review required"));
+
+            approvalPr = reviewer.pullRequest(pr.id());
+            approvalPr.addReview(Review.Verdict.APPROVED, "Approved");
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains("Review applies to"));
+            assertFalse(pr.store().body().contains("Re-review required"));
+
+            localRepo.merge(new Branch("master"));
+            localRepo.add(f);
+            mergeHash = localRepo.commit("Updated from master 2", author.name(), "author@example.com");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "feature", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains(" ⚠️ Review applies to"));
+            assertTrue(pr.store().body().contains("Review applies to"));
+
+            localRepo.checkout(new Branch("master"));
+            Files.writeString(f, """
+                    0
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    c
+                    """);
+            localRepo.add(f);
+            masterHash = localRepo.commit("master 4", author.name(), "someone@example.com");
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+
+            localRepo.checkout(new Branch("feature"));
+            localRepo.merge(new Branch("master"));
+            localRepo.add(f);
+            mergeHash = localRepo.commit("Updated from master 3", author.name(), "author@example.com");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "feature", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+
+            localRepo.checkout(new Branch("master"));
+            Files.writeString(f, """
+                    0
+                    1
+                    2
+                    3
+                    4
+                    5
+                    6
+                    7
+                    8
+                    9
+                    a
+                    b
+                    """);
+            localRepo.add(f);
+            masterHash = localRepo.commit("master 5", author.name(), "someone@example.com");
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+
+            localRepo.checkout(new Branch("feature"));
+            localRepo.merge(new Branch("master"));
+            Files.writeString(f, """
+                    w
+                    x
+                    y
+                    z
+                    """);
+            localRepo.add(f);
+            mergeHash = localRepo.commit("Updated from master 4", author.name(), "author@example.com");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "feature", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains(" 🔄 Re-review required"));
         }
     }
 
@@ -1834,6 +2163,18 @@ class CheckTests {
 
             // Verify that the title is expanded
             assertEquals(numericId + ": " + bug.title(), bugPR.store().title());
+
+            // Now update pr title to non-canonical form
+            bugPR.setTitle(bug.id() + " " + bug.title());
+            TestBotRunner.runPeriodicItems(checkBot);
+            // Verify that the title is in canonical form
+            assertEquals(numericId + ": " + bug.title(), bugPR.store().title());
+
+            // Now update pr title to another non-canonical form
+            bugPR.setTitle(bug.id() + ": " + bug.title());
+            TestBotRunner.runPeriodicItems(checkBot);
+            // Verify that the title is in canonical form
+            assertEquals(numericId + ": " + bug.title(), bugPR.store().title());
         }
     }
 
@@ -1901,9 +2242,9 @@ class CheckTests {
             localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
 
             // Create a different conf on a different branch
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("reviewers=1", "reviewers=0");
-            Files.writeString(localRepo.root().resolve("jcheck.conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve("jcheck.conf"), newConf);
             localRepo.add(localRepo.root().resolve("jcheck.conf"));
             var confHash = localRepo.commit("Separate conf", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "jcheck-branch", true);
@@ -1943,9 +2284,9 @@ class CheckTests {
             localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
 
             // Create a different conf on a different branch
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("reviewers=1", "reviewers=0");
-            Files.writeString(localRepo.root().resolve("jcheck.conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve("jcheck.conf"), newConf);
             localRepo.add(localRepo.root().resolve("jcheck.conf"));
             var confHash = localRepo.commit("Separate conf", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "jcheck-branch", true);
@@ -1999,10 +2340,8 @@ class CheckTests {
             // The bot should respond with an integration message and a warning about different authors
             var comments = pr.comments();
             var numComments = comments.size();
-            var lastComment = comments.get(comments.size() - 1).body();
-            assertTrue(lastComment.contains("This change now passes all *automated* pre-integration checks."));
-            var nextToLastComment = comments.get(comments.size() - 2).body();
-            assertTrue(nextToLastComment.contains("the full name on your profile does not match the author name"));
+            assertLastCommentContains(pr, "the full name on your profile does not match the author name");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks.");
 
             // Run the bot again, should not result in any new comments
             TestBotRunner.runPeriodicItems(mergeBot);
@@ -2035,7 +2374,7 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(csrIssueBot);
 
             var issue = issueProject.createIssue("This is the primary issue", List.of(), Map.of());
-            issue.setState(Issue.State.OPEN);
+            issue.setState(Issue.State.CLOSED);
             issue.setProperty("issuetype", JSON.of("Bug"));
             issue.setProperty("fixVersions", JSON.array().add("18"));
 
@@ -2075,9 +2414,9 @@ class CheckTests {
             PullRequestUtils.postPullRequestLinkComment(issue, pr);
 
             // Remove `version=0.1` from `.jcheck/conf`, set the version as null
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("version=0.1", "");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             var confHash = localRepo.commit("Set version as null", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -2093,9 +2432,9 @@ class CheckTests {
             assertFalse(pr.store().body().contains(csr.title()));
 
             // Add `version=bla` to `.jcheck/conf`, set the version as a wrong value
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("project=test", "project=test\nversion=bla");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as a wrong value", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -2110,9 +2449,9 @@ class CheckTests {
             assertFalse(pr.store().body().contains(csr.title()));
 
             // Set the `version` in `.jcheck/conf` as 17 which is an available version.
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("version=bla", "version=17");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as 17", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -2180,9 +2519,9 @@ class CheckTests {
             // Set the backport CSR to have multiple fix versions, included 11.
             backportCsr.setProperty("fixVersions", JSON.array().add("17").add("11").add("8"));
             // Set the `version` in `.jcheck/conf` as 11.
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("version=17", "version=11");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as 11", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -2307,13 +2646,12 @@ class CheckTests {
 
             // Check the status
             TestBotRunner.runPeriodicItems(checkBot);
-            var comments = pr.store().comments();
-            assertTrue(comments.get(comments.size() - 1).body().contains(" ⚠️ @" + pr.author().username() + " No `.jcheck/conf` found in the target branch of this pull request. "
-                    + "Until that is resolved, this pull request cannot be processed. Please notify the repository owner."));
+            assertLastCommentContains(pr, " ⚠️ @" + pr.author().username() + " No `.jcheck/conf` found in the target branch of this pull request. "
+                    + "Until that is resolved, this pull request cannot be processed. Please notify the repository owner.");
             // Make sure the warning message will be sent only once
             TestBotRunner.runPeriodicItems(checkBot);
             TestBotRunner.runPeriodicItems(checkBot);
-            assertEquals(1, pr.store().comments().size());
+            assertEquals(2, pr.comments().size());
 
             // Restore .jcheck/conf
             localRepo.checkout(masterHash);
@@ -2368,13 +2706,32 @@ class CheckTests {
 
             // Check the status
             TestBotRunner.runPeriodicItems(checkBot);
-            var comments = pr.store().comments();
-            assertTrue(comments.get(comments.size() - 1).body().contains(" ⚠️ @" + pr.author().username() + " The `.jcheck/conf` in the target branch of this pull request is invalid. "
-                    + "Until that is resolved, this pull request cannot be processed. Please notify the repository owner."));
+            assertLastCommentContains(pr, " ⚠️ @" + pr.author().username() + " The `.jcheck/conf` in the target branch of this pull request is invalid. "
+                    + "Until that is resolved, this pull request cannot be processed. Please notify the repository owner.");
             // Make sure the warning message will be sent only once
             TestBotRunner.runPeriodicItems(checkBot);
             TestBotRunner.runPeriodicItems(checkBot);
-            assertEquals(1, pr.store().comments().size());
+            assertEquals(2, pr.comments().size());
+
+            var reviewerPr = reviewer.pullRequest(pr.id());
+            // Close the pr so we can skip CheckWorkItem
+            pr.setState(Issue.State.CLOSED);
+            reviewerPr.addComment("/reviewers 2");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertEquals("<!-- Jmerge command reply message (2) -->\n" +
+                    "@user2 JCheck configuration is invalid in the target branch of this pull request. " +
+                    "Please issue this command again once the problem has been resolved.", pr.comments().get(3).body());
+
+            pr.setTargetRef("notExist");
+            reviewerPr.addComment("/reviewers 2");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertEquals("<!-- Jmerge command reply message (4) -->\n" +
+                    "@user2 The target branch of this pull request no longer exists. " +
+                    "Please retarget this pull request. " +
+                    "Please issue this command again once the problem has been resolved.", pr.comments().get(5).body());
+
+            pr.setTargetRef("master");
+            pr.setState(Issue.State.OPEN);
 
             // Restore .jcheck/conf
             localRepo.checkout(masterHash);
@@ -2403,10 +2760,13 @@ class CheckTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory()) {
             var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
             var conf = credentials.getHostedRepository();
 
             var censusBuilder = credentials.getCensusBuilder()
-                    .addAuthor(author.forge().currentUser().id());
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+
             var checkBot = PullRequestBot.newBuilder()
                     .repo(author)
                     .censusRepo(censusBuilder.build())
@@ -2434,13 +2794,22 @@ class CheckTests {
             var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
 
             TestBotRunner.runPeriodicItems(checkBot);
-            var comments = pr.store().comments();
-            assertTrue(comments.get(comments.size() - 1).body().contains(" ⚠️ @" + pr.author().username() + " The external jcheck configuration for this repository could not be found. "
-                    + "Until that is resolved, this pull request cannot be processed. Please notify a Skara admin."));
+            assertLastCommentContains(pr, " ⚠️ @" + pr.author().username() + " The external jcheck configuration for this repository could not be found. "
+                    + "Until that is resolved, this pull request cannot be processed. Please notify a Skara admin.");
             // Make sure the warning message will be sent only once
             TestBotRunner.runPeriodicItems(checkBot);
             TestBotRunner.runPeriodicItems(checkBot);
-            assertEquals(1, pr.store().comments().size());
+            assertEquals(2, pr.comments().size());
+
+            var reviewerPr = reviewer.pullRequest(pr.id());
+            // Close the pr so we can skip CheckWorkItem
+            pr.setState(Issue.State.CLOSED);
+            reviewerPr.addComment("/reviewers 2");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertEquals("<!-- Jmerge command reply message (2) -->\n" +
+                    "@user2 The JCheck configuration has been overridden, but is missing. Skara admins have been notified. " +
+                    "Please issue this command again once the problem has been resolved.", pr.comments().get(3).body());
+            pr.setState(Issue.State.OPEN);
 
             // Upload .jcheck/conf to jcheck-branch
             var jCheckBranch = localRepo.branch(masterHash, "jcheck-branch");
@@ -2503,13 +2872,12 @@ class CheckTests {
 
             // Check the status (should become ready immediately as reviewercount is overridden to 0)
             TestBotRunner.runPeriodicItems(checkBot);
-            var comments = pr.store().comments();
-            assertTrue(comments.get(comments.size() - 1).body().contains(" ⚠️ @" + pr.author().username() + " The external jcheck configuration for this repository is invalid. "
-                    + "Until that is resolved, this pull request cannot be processed. Please notify a Skara admin."));
+            assertLastCommentContains(pr, " ⚠️ @" + pr.author().username() + " The external jcheck configuration for this repository is invalid. "
+                    + "Until that is resolved, this pull request cannot be processed. Please notify a Skara admin.");
             // Make sure the warning message will be sent only once
             TestBotRunner.runPeriodicItems(checkBot);
             TestBotRunner.runPeriodicItems(checkBot);
-            assertEquals(1, pr.store().comments().size());
+            assertEquals(2, pr.comments().size());
 
             // restore jcheck.conf to jcheck-branch
             localRepo.checkout(jCheckBranch);
@@ -2533,6 +2901,9 @@ class CheckTests {
             output.append("[checks]\n");
             output.append("error=");
             output.append(String.join(",", Set.of("author", "reviewers", "whitespace")));
+            output.append("\n");
+            output.append("warning=");
+            output.append(String.join(",", Set.of("issuestitle")));
             output.append("\n\n");
             output.append("[census]\n");
             output.append("version=0\n");
@@ -2573,12 +2944,13 @@ class CheckTests {
             var editHash = CheckableRepository.appendAndCommit(localRepo);
             localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
             var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+            TestBotRunner.runPeriodicItems(checkBot);
             pr.addComment("initial");
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The PR shouldn't have the force-push suggestion comment
-            assertEquals(1, pr.comments().size());
-            var lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(2, pr.comments().size());
+            var lastComment = pr.comments().getLast();
             assertTrue(lastComment.body().contains("initial"));
             assertFalse(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertFalse(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2590,8 +2962,8 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The PR shouldn't have the force-push suggestion comment.
-            assertEquals(2, pr.comments().size());
-            lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(3, pr.comments().size());
+            lastComment = pr.comments().getLast();
             assertTrue(lastComment.body().contains("Normally push"));
             assertFalse(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertFalse(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2607,8 +2979,8 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The last comment of the PR should be the force-push suggestion comment.
-            assertEquals(4, pr.comments().size());
-            lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(5, pr.comments().size());
+            lastComment = pr.comments().getLast();
             assertFalse(lastComment.body().contains("Force-push"));
             assertTrue(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertTrue(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2623,8 +2995,8 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The last comment of the PR shouldn't be the force-push suggestion comment.
-            assertEquals(5, pr.comments().size());
-            lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(6, pr.comments().size());
+            lastComment = pr.comments().getLast();
             assertTrue(lastComment.body().contains("Normally push in draft"));
             assertFalse(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertFalse(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2640,8 +3012,8 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The last comment of the PR should not be the force-push suggestion comment.
-            assertEquals(6, pr.comments().size());
-            lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(7, pr.comments().size());
+            lastComment = pr.comments().getLast();
             assertTrue(lastComment.body().contains("Force-push in draft"));
             assertFalse(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertFalse(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2651,8 +3023,8 @@ class CheckTests {
 
             // Nothing should happen
             TestBotRunner.runPeriodicItems(checkBot);
-            assertEquals(6, pr.comments().size());
-            lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(7, pr.comments().size());
+            lastComment = pr.comments().getLast();
             assertTrue(lastComment.body().contains("Force-push in draft"));
             assertFalse(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertFalse(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2668,8 +3040,8 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(checkBot);
 
             // The last comment of the PR should be the force-push suggestion comment.
-            assertEquals(8, pr.comments().size());
-            lastComment = pr.comments().get(pr.comments().size() - 1);
+            assertEquals(9, pr.comments().size());
+            lastComment = pr.comments().getLast();
             assertFalse(lastComment.body().contains("Force-push"));
             assertTrue(lastComment.body().contains(FORCE_PUSH_MARKER));
             assertTrue(lastComment.body().contains(FORCE_PUSH_SUGGESTION));
@@ -2733,6 +3105,75 @@ class CheckTests {
              var tempFolder = new TemporaryDirectory()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var seedFolder = tempFolder.path().resolve("seed");
+            var checkBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .censusLink("https://census.com/{{contributor}}-profile")
+                    .seedStorage(seedFolder)
+                    .issueProject(issues)
+                    .issuePRMap(new HashMap<>())
+                    .build();
+
+            // Populate the projects repository
+            // set the .jcheck/conf without whitespace and issuestitle check
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), Path.of("appendable.txt"), Set.of("author", "reviewers"), Set.of(), "0.1");
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var issue = issues.createIssue("This is an issue.", List.of("Test"), Map.of());
+            // Make a change with a corresponding PR, add a line with whitespace issue
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "An additional line\r\n");
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", issue.id());
+
+            // Check the status
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            // Verify that the check succeeded
+            var checks = pr.checks(editHash);
+            assertEquals(1, checks.size());
+            var check = checks.get("jcheck");
+            assertEquals(CheckStatus.SUCCESS, check.status());
+            // pr body should not have the process for whitespace
+            assertFalse(pr.store().body().contains("whitespace"));
+            assertFalse(pr.store().body().contains("Warning"));
+
+            // Add whitespace and issuestitle check to .jcheck/conf
+            var checkConf = tempFolder.path().resolve(".jcheck/conf");
+            writeToCheckConf(checkConf);
+            localRepo.add(checkConf);
+            var updateHash = localRepo.commit("enable whitespace issue check", "testauthor", "ta@none.none");
+            localRepo.push(updateHash, author.authenticatedUrl(), "edit", true);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            // pr body should have the integrationBlocker for whitespace and reviewer check, also warning for issuestitle check
+            assertTrue(pr.store().body().contains("Whitespace errors (failed with updated jcheck configuration in pull request)"));
+            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with updated jcheck configuration in pull request)"));
+            assertTrue(pr.store().body().contains("Found trailing period in issue title for `1: This is an issue.` (failed with updated jcheck configuration in pull request)"));
+
+            var approvalPr = reviewer.pullRequest(pr.id());
+            approvalPr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            // // pr body should only have the integrationBlocker for whitespace check
+            assertTrue(pr.store().body().contains("Whitespace errors (failed with updated jcheck configuration in pull request)"));
+            assertFalse(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with updated jcheck configuration in pull request)"));
+        }
+    }
+
+    @Test
+    void testNotRunJcheckTwice(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
 
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id())
@@ -2767,26 +3208,23 @@ class CheckTests {
             // pr body should not have the process for whitespace
             assertFalse(pr.store().body().contains("whitespace"));
 
+            localRepo.checkout(masterHash);
             // Add whitespace check to .jcheck/conf
             var checkConf = tempFolder.path().resolve(".jcheck/conf");
             writeToCheckConf(checkConf);
             localRepo.add(checkConf);
             var updateHash = localRepo.commit("enable whitespace issue check", "testauthor", "ta@none.none");
-            localRepo.push(updateHash, author.authenticatedUrl(), "edit", true);
+            localRepo.push(updateHash, author.authenticatedUrl(), "master", true);
+            CheckableRepository.appendAndCommit(localRepo, "An additional line1\r\n");
+            CheckableRepository.appendAndCommit(localRepo, "An additional line2\r\n");
+            updateHash = CheckableRepository.appendAndCommit(localRepo, "An additional line3\r\n");
+            localRepo.push(updateHash, author.authenticatedUrl(), "master", true);
 
             TestBotRunner.runPeriodicItems(checkBot);
 
-            // pr body should have the integrationBlocker for whitespace and reviewer check
-            assertTrue(pr.store().body().contains("Whitespace errors (failed with the updated jcheck configuration)"));
-            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with the updated jcheck configuration)"));
-
-            var approvalPr = reviewer.pullRequest(pr.id());
-            approvalPr.addReview(Review.Verdict.APPROVED, "Approved");
-            TestBotRunner.runPeriodicItems(checkBot);
-
-            // // pr body should only have the integrationBlocker for whitespace check
-            assertTrue(pr.store().body().contains("Whitespace errors (failed with the updated jcheck configuration)"));
-            assertFalse(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with the updated jcheck configuration)"));
+            // pr body should not have the integrationBlocker for whitespace and reviewer check
+            assertFalse(pr.store().body().contains("Whitespace errors (failed with updated jcheck configuration in pull request)"));
+            assertFalse(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with updated jcheck configuration in pull request)"));
         }
     }
 
@@ -2844,8 +3282,8 @@ class CheckTests {
             assertEquals(1, checks.size());
             check = checks.get("jcheck");
             assertEquals(CheckStatus.FAILURE, check.status());
-            assertEquals("line 18: entry must be of form 'key = value'", check.summary().get());
-            assertEquals("Exception occurred during second jcheck - the operation will be retried", check.title().get());
+            assertEquals("line 27: entry must be of form 'key = value'", check.summary().get());
+            assertEquals("Exception occurred during source jcheck - the operation will be retried", check.title().get());
 
             // Restore .jcheck/conf and add whitespace issue check
             writeToCheckConf(checkConf);
@@ -2855,8 +3293,8 @@ class CheckTests {
 
             TestBotRunner.runPeriodicItems(checkBot);
             // pr body should have the integrationBlocker for whitespace and reviewer check
-            assertTrue(pr.store().body().contains("Whitespace errors (failed with the updated jcheck configuration)"));
-            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with the updated jcheck configuration)"));
+            assertTrue(pr.store().body().contains("Whitespace errors (failed with updated jcheck configuration in pull request)"));
+            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (failed with updated jcheck configuration in pull request)"));
         }
     }
 
@@ -2938,19 +3376,19 @@ class CheckTests {
             // Check the status
             TestBotRunner.runPeriodicItems(prBot);
 
-            var comment = pr.store().comments().get(pr.store().comments().size() - 1);
-            assertEquals(1, pr.store().comments().size());
+            var comment = pr.comments().getLast();
+            assertEquals(2, pr.comments().size());
             assertTrue(comment.body().contains("Merge-style pull requests are not allowed in this repository"));
 
             pr.setTitle("Merge test:dev");
             TestBotRunner.runPeriodicItems(prBot);
-            comment = pr.store().comments().get(pr.store().comments().size() - 1);
-            assertEquals(1, pr.store().comments().size());
+            comment = pr.comments().getLast();
+            assertEquals(2, pr.comments().size());
             assertTrue(comment.body().contains("Merge-style pull requests are not allowed in this repository"));
 
             pr.setTitle("SKARA-123");
             TestBotRunner.runPeriodicItems(prBot);
-            assertEquals(1, pr.store().comments().size());
+            assertEquals(2, pr.comments().size());
         }
     }
 
@@ -2986,19 +3424,19 @@ class CheckTests {
             // Check the status
             TestBotRunner.runPeriodicItems(prBot);
 
-            var comment = pr.store().comments().get(pr.store().comments().size() - 1);
-            assertEquals(1, pr.store().comments().size());
+            var comment = pr.comments().getLast();
+            assertEquals(2, pr.comments().size());
             assertTrue(comment.body().contains("backports are not allowed in this repository"));
 
             pr.setTitle("Backport 123");
             TestBotRunner.runPeriodicItems(prBot);
-            comment = pr.store().comments().get(pr.store().comments().size() - 1);
-            assertEquals(1, pr.store().comments().size());
+            comment = pr.comments().getLast();
+            assertEquals(2, pr.comments().size());
             assertTrue(comment.body().contains("backports are not allowed in this repository"));
 
             pr.setTitle("SKARA-123");
             TestBotRunner.runPeriodicItems(prBot);
-            assertEquals(1, pr.store().comments().size());
+            assertEquals(2, pr.comments().size());
         }
     }
 
@@ -3040,9 +3478,9 @@ class CheckTests {
 
             //Make a change to .jcheck/conf in target branch
             localRepo.checkout(localRepo.defaultBranch());
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("reviewers=1", "reviewers=2");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             var confHash = localRepo.commit("set reviewers=2", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -3055,6 +3493,391 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             TestBotRunner.runPeriodicItems(prBot);
+        }
+    }
+
+    @Test
+    void maintainerApprovalWithDependentPR(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issueProject = credentials.getIssueProject();
+            var issue = issueProject.createIssue("This is an issue", List.of(), Map.of());
+            issue.setProperty("issuetype", JSON.of("Bug"));
+            issue.setProperty("priority", JSON.of("4"));
+            var issue2 = issueProject.createIssue("This is an issue2", List.of(), Map.of());
+            issue2.setProperty("issuetype", JSON.of("Bug"));
+            issue2.setProperty("priority", JSON.of("4"));
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(reviewer.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            Approval approval = new Approval("", "-critical-request", "-critical-approved",
+                    "-critical-rejected", "https://example.com", true, "maintainer approval");
+            approval.addBranchPrefix(Pattern.compile("jdk20.0.1"), "CPU23_04");
+            approval.addBranchPrefix(Pattern.compile("jdk20.0.2"), "CPU23_05");
+
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .issueProject(issueProject)
+                    .censusRepo(censusBuilder.build())
+                    .issuePRMap(issuePRMap)
+                    .approval(approval)
+                    .integrators(Set.of(reviewer.forge().currentUser().username()))
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "jdk20.0.1", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+
+            var pr = credentials.createPullRequest(author, "jdk20.0.1", "edit", issue.id() + ": This is an issue");
+
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().labelNames().contains("ready"));
+
+            localRepo.push(editHash, author.authenticatedUrl(), PreIntegrations.preIntegrateBranch(pr), true);
+
+            var followUp = CheckableRepository.appendAndCommit(localRepo, "Follow-up work", "Follow-up change");
+            localRepo.push(followUp, author.authenticatedUrl(), "followup", true);
+            var followUpPr = credentials.createPullRequest(author, PreIntegrations.preIntegrateBranch(pr), "followup", issue2.id());
+            TestBotRunner.runPeriodicItems(prBot);
+
+            assertTrue(followUpPr.store().body().contains("needs maintainer approval"));
+        }
+    }
+
+    @Test
+    void overrideJcheckConfAndAdditionalConf(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var conf = credentials.getHostedRepository();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                                           .addAuthor(author.forge().currentUser().id());
+            var checkBot = PullRequestBot.newBuilder()
+                                         .repo(author)
+                                         .censusRepo(censusBuilder.build())
+                                         .confOverrideRepo(conf)
+                                         .confOverrideName("jcheck.conf")
+                                         .confOverrideRef("jcheck-branch")
+                                         .reviewMerge(MergePullRequestReviewConfiguration.ALWAYS)
+                                         .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Create a different conf on a different branch
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
+            var newConf = defaultConf.replace("reviewers=1", "reviewers=0");
+            Files.writeString(localRepo.root().resolve("jcheck.conf"), newConf);
+            localRepo.add(localRepo.root().resolve("jcheck.conf"));
+            var confHash = localRepo.commit("Separate conf", "duke", "duke@openjdk.org");
+            localRepo.push(confHash, author.authenticatedUrl(), "jcheck-branch", true);
+            localRepo.checkout(masterHash, true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+
+            localRepo.checkout(masterHash, true);
+            localRepo.branch(masterHash, "dev");
+            localRepo.merge(editHash, Repository.FastForward.DISABLE);
+            var mergeHash = localRepo.commit("Merge edit", "duke", "duke@openjdk.org");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "dev", true);
+            var pr = credentials.createPullRequest(author, "master", "dev", "Merge edit");
+
+            // Check the status (should become ready immediately as reviewercount is overridden to 0)
+            // even though merge PRs should always be reviewed
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertEquals(Set.of("rfr", "ready", "clean"), new HashSet<>(pr.store().labelNames()));
+        }
+    }
+
+    @Test
+    void fixVersionNotMatch(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issueProject = credentials.getIssueProject();
+            var issue = issueProject.createIssue("This is an issue", List.of(), Map.of());
+            issue.setProperty("issuetype", JSON.of("Bug"));
+            issue.setProperty("priority", JSON.of("4"));
+            issue.setState(Issue.State.OPEN);
+            issue.setProperty("fixVersions", JSON.array().add("18"));
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(reviewer.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .issueProject(issueProject)
+                    .censusRepo(censusBuilder.build())
+                    .issuePRMap(issuePRMap)
+                    .versionMismatchWarning(true)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "1");
+
+
+            // Populate the projects repository
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().body().contains("(⚠️ The fixVersion in this issue is [18] but the fixVersion in .jcheck/conf is 0.1, a new backport will be created when this pr is integrated.)"));
+
+            issue.setProperty("fixVersions", JSON.array().add("0.1"));
+            pr.store().setBody("update");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().body().contains("(⚠️ The fixVersion"));
+
+            issue.setProperty("fixVersions", JSON.array().add("0.1").add("0.2"));
+            pr.store().setBody("update");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().body().contains("(⚠️ The fixVersion in this issue is [0.1, 0.2] but the fixVersion in .jcheck/conf is 0.1, a new backport will be created when this pr is integrated.)"));
+
+
+            issue.setProperty("fixVersions", JSON.array().add("tbd"));
+            pr.store().setBody("update");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().body().contains("(⚠️ The fixVersion"));
+        }
+    }
+
+    @Test
+    void versionMismatchWarningOffByDefault(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issueProject = credentials.getIssueProject();
+            var issue = issueProject.createIssue("This is an issue", List.of(), Map.of());
+            issue.setProperty("issuetype", JSON.of("Bug"));
+            issue.setProperty("priority", JSON.of("4"));
+            issue.setState(Issue.State.OPEN);
+            issue.setProperty("fixVersions", JSON.array().add("18"));
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(reviewer.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .issueProject(issueProject)
+                    .censusRepo(censusBuilder.build())
+                    .issuePRMap(issuePRMap)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "1");
+
+
+            // Populate the projects repository
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().body().contains("(⚠️ The fixVersion"));
+        }
+    }
+
+    @Test
+    void issuesTitleCheck(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(issuePRMap)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), Path.of("appendable.txt"),Set.of("author", "reviewers", "whitespace"), Set.of("issuestitle"), "0.1");
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // An issue with trailing period
+            var issue1 = issues.createIssue("    This is an issue.   ", List.of("Hello"), Map.of());
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", issue1.id(), List.of("Body"), false);
+
+            // Check the status
+            TestBotRunner.runPeriodicItems(prBot);
+
+            assertTrue(pr.store().body().contains("Warning"));
+            assertTrue(pr.store().body().contains("Found trailing period in issue title for `1: This is an issue.`"));
+
+            // Remove the trailing period in the title
+            pr.setTitle("1:     This is an issue");
+            issue1.setTitle("    This is an issue");
+
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().body().contains("Warning"));
+            assertFalse(pr.store().body().contains("Found trailing period in issue title for 1: This is an issue."));
+
+            // Create another issue with trailing period
+            var issue2 = issues.createIssue("   this is an issue2 etc.    ", List.of("Hello"), Map.of());
+            pr.addComment("/issue add " + issue2.id());
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().body().contains("Found trailing period in issue title for `2: this is an issue2 etc.`"));
+            assertTrue(pr.store().body().contains("Found leading lowercase letter in issue title for `2: this is an issue2 etc.`"));
+
+            // Change the leading letter to upper case
+            issue2.setTitle("This is an issue2 etc.");
+            pr.setBody("update this pr");
+            TestBotRunner.runPeriodicItems(prBot);
+            // The additional issue marker should be updated, so the warning of leading lowercase letter no longer exists
+            assertFalse(pr.store().body().contains("Found leading lowercase letter in issue title for `2: this is an issue2 etc.`"));
+            assertFalse(pr.store().body().contains("Found trailing period in issue title for `2: This is an issue2 etc.`"));
+
+            // Approve it as Reviewer, warnings shouldn't prevent adding ready label to the pr
+            var reviewerPr = reviewer.pullRequest(pr.id());
+            reviewerPr.addReview(Review.Verdict.APPROVED, "LGTM");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().labelNames().contains("ready"));
+
+            // Should be able to integrate with warnings
+            pr.addComment("/integrate");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().labelNames().contains("integrated"));
+        }
+    }
+
+    @Test
+    void copyrightCheck(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(issuePRMap)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), Path.of("appendable.txt"),Set.of("author", "reviewers", "whitespace"), Set.of("copyright"), "0.1");
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "/*\n" +
+                    " * Copyright (c) 2024,  Oracle and/or its affiliates. All rights reserved.\n" +
+                    " * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.\n" +
+                    " */\n");
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Pull Request", List.of("Body"), false);
+            // Check the status
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().body().contains("Found copyright format issue for oracle in [appendable.txt]"));
+
+            // Fix the issue
+            var editHash2 = CheckableRepository.replaceAndCommit(localRepo, "/*\n" +
+                    " * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.\n" +
+                    " * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.\n" +
+                    " */\n");
+            localRepo.push(editHash2, author.authenticatedUrl(), "edit", true);
+            // Check the status
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().body().contains("Found copyright format issue for oracle in [appendable.txt]"));
+
+            // Replace the oracle copyright with red hat one
+            var editHash3 = CheckableRepository.replaceAndCommit(localRepo, "/*\n" +
+                    " * Copyright (c) 2024,  Red Hat, Inc.\n" +
+                    " * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.\n" +
+                    " */\n");
+            localRepo.push(editHash3, author.authenticatedUrl(), "edit", true);
+            // Check the status
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().body().contains("Found copyright format issue for redhat in [appendable.txt]"));
+            assertTrue(pr.store().body().contains("Can't find copyright header for oracle in [appendable.txt]"));
+        }
+    }
+
+    @Test
+    void WhitespaceAndReviewersCheckAsWarnings(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(issuePRMap)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), Path.of("appendable.txt"), Set.of(), Set.of("reviewers", "whitespace"), "0.1");
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+            var issue1 = issues.createIssue("This is an issue", List.of("Hello"), Map.of());
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "An additional line\r\n");
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", issue1.id(), List.of("Body"), false);
+
+            // Check the status
+            TestBotRunner.runPeriodicItems(prBot);
+
+            assertFalse(pr.store().body().contains("Warning"));
         }
     }
 }

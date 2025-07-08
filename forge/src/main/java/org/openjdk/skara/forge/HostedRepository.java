@@ -73,6 +73,11 @@ public interface HostedRepository {
      * The full name of the repository, including any namespace/group/organization prefix
      */
     String name();
+
+    /**
+     * The group/org name where this repo belongs
+     */
+    String group();
     Optional<HostedRepository> parent();
     URI authenticatedUrl();
     URI webUrl();
@@ -89,7 +94,8 @@ public interface HostedRepository {
     URI url();
 
     /**
-     * Returns contents of the file, if the file does not exist, returns Optional.empty().
+     * Returns contents of the file, if the file does not exist, returns Optional.empty(),
+     * if the ref does not exist, throws exception.
      */
     Optional<String> fileContents(String filename, String ref);
 
@@ -102,14 +108,20 @@ public interface HostedRepository {
      * @param message     Commit message
      * @param authorName  Name of author and committer for commit
      * @param authorEmail Email of author and committer for commit
+     * @param createNewFile Determines the file operation mode
+     *                      If set to `true`, the operation attempts to create a new file and write contents to it.
+     *                      The operation will fail if the file already exists.
+     *                      If set to `false`, the operation attempts to update an existing file.
+     *                      The operation will fail if the file does not exist.
      */
-    void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail);
+    void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail, boolean createNewFile);
     String namespace();
     Optional<WebHook> parseWebHook(JSONValue body);
     HostedRepository fork();
     long id();
     Optional<Hash> branchHash(String ref);
     List<HostedBranch> branches();
+    String defaultBranchName();
 
     /**
      * Adds a branch protection rule based on a branch pattern. The rule prevents
@@ -161,7 +173,9 @@ public interface HostedRepository {
     URI createPullRequestUrl(HostedRepository target,
                              String targetRef,
                              String sourceRef);
+    List<Collaborator> collaborators();
     void addCollaborator(HostUser user, boolean canPush);
+    void removeCollaborator(HostUser user);
     boolean canPush(HostUser user);
     void restrictPushAccess(Branch branch, HostUser users);
     List<Label> labels();

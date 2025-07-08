@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -116,16 +116,13 @@ public class GitHubRepository implements HostedRepository {
                                          String title,
                                          List<String> body,
                                          boolean draft) {
-        if (!(target instanceof GitHubRepository)) {
+        if (!(target instanceof GitHubRepository upstream)) {
             throw new IllegalArgumentException("target repository must be a GitHub repository");
         }
 
-        var upstream = (GitHubRepository) target;
-        var user = forge().currentUser().username();
-        var namespace = user.endsWith("[bot]") ? "" : user + ":";
         var params = JSON.object()
                          .put("title", title)
-                         .put("head", namespace + sourceRef)
+                         .put("head", group() + ":" + sourceRef)
                          .put("base", targetRef)
                          .put("body", String.join("\n", body))
                          .put("draft", draft);
@@ -133,7 +130,7 @@ public class GitHubRepository implements HostedRepository {
                                  .body(params)
                                  .execute();
 
-        return new GitHubPullRequest(upstream, pr, request);
+        return new GitHubPullRequest(upstream, pr, upstream.request);
     }
 
     @Override
@@ -214,6 +211,11 @@ public class GitHubRepository implements HostedRepository {
     }
 
     @Override
+    public String group() {
+        return repository.split("/")[0];
+    }
+
+    @Override
     public URI authenticatedUrl() {
         var builder = URIBuilder.base(gitHubHost.getURI())
                                 .setPath("/" + repository + ".git");
@@ -278,7 +280,9 @@ public class GitHubRepository implements HostedRepository {
         } catch (UncheckedRestException e) {
             // The onError handler is not used with executeUnparsed, so have to
             // resort to catching exception for 404 handling.
-            if (e.getStatusCode() == 404) {
+            // For GitHub, if ref not found, it returns "No commit found for the ref ",
+            // if file not found, it returns "Not Found".
+            if (e.getStatusCode() == 404 && e.getMessage().contains("Not Found")) {
                 return Optional.empty();
             } else {
                 throw e;
@@ -289,7 +293,7 @@ public class GitHubRepository implements HostedRepository {
     }
 
     @Override
-    public void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail) {
+    public void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail, boolean createNewFile) {
         var body = JSON.object()
                 .put("message", message)
                 .put("branch", branch.name())
@@ -299,12 +303,14 @@ public class GitHubRepository implements HostedRepository {
                 .put("content", new String(Base64.getEncoder().encode(content.getBytes(StandardCharsets.UTF_8)), StandardCharsets.UTF_8));
 
         // If the file exists, we have to supply the current sha with the update request.
-        var curentFileData = request.get("contents/" + filename)
-                .param("ref", branch.name())
-                .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.object().put("NOT_FOUND", true)) : Optional.empty())
-                .execute();
-        if (curentFileData.contains("sha")) {
-            body.put("sha", curentFileData.get("sha").asString());
+        if (!createNewFile) {
+            var currentFileData = request.get("contents/" + filename)
+                    .param("ref", branch.name())
+                    .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.object().put("NOT_FOUND", true)) : Optional.empty())
+                    .execute();
+            if (currentFileData.contains("sha")) {
+                body.put("sha", currentFileData.get("sha").asString());
+            }
         }
 
         request.put("contents/" + filename)
@@ -351,6 +357,11 @@ public class GitHubRepository implements HostedRepository {
                        .map(b -> new HostedBranch(b.get("name").asString(),
                                                   new Hash(b.get("commit").get("sha").asString())))
                        .collect(Collectors.toList());
+    }
+
+    @Override
+    public String defaultBranchName() {
+        return json().get("default_branch").asString();
     }
 
     @Override
@@ -520,7 +531,7 @@ public class GitHubRepository implements HostedRepository {
         }
     }
 
-    Diff toDiff(Hash from, Hash to, JSONValue files) {
+    Diff toDiff(Hash from, Hash to, JSONValue files, boolean complete) {
         var patches = new ArrayList<Patch>();
 
         for (var file : files.asArray()) {
@@ -542,7 +553,7 @@ public class GitHubRepository implements HostedRepository {
                                          status, hunks));
         }
 
-        return new Diff(from, to, patches);
+        return new Diff(from, to, patches, complete);
     }
 
     @Override
@@ -568,11 +579,22 @@ public class GitHubRepository implements HostedRepository {
         var metadata = toCommitMetadata(o);
         List<Diff> diffs;
         if (includeDiffs) {
-            diffs = List.of(toDiff(metadata.parents().get(0), hash, o.get("files")));
+            var totalAdditions = o.get("stats").get("additions").asInt();
+            var totalDeletions = o.get("stats").get("deletions").asInt();
+            var sumAdditions = 0;
+            var sumDeletions = 0;
+            for (var patch : o.get("files").asArray()) {
+                sumAdditions += patch.get("additions").asInt();
+                sumDeletions += patch.get("deletions").asInt();
+            }
+            var complete = totalAdditions == sumAdditions && totalDeletions == sumDeletions;
+            diffs = List.of(toDiff(metadata.parents().get(0), hash, o.get("files"), complete));
         } else {
             diffs = List.of();
         }
-        return Optional.of(new HostedCommit(metadata, diffs, URI.create(o.get("html_url").asString())));
+        var url = URI.create(o.get("html_url").asString());
+        var webUrl = gitHubHost.getWebURI(url.getPath());
+        return Optional.of(new HostedCommit(metadata, diffs, url, webUrl));
     }
 
     @Override
@@ -648,12 +670,27 @@ public class GitHubRepository implements HostedRepository {
     }
 
     @Override
+    public List<Collaborator> collaborators() {
+        var result = request.get("collaborators")
+                .param("affiliation", "direct")
+                .execute();
+        return result.stream()
+                .map(o -> new Collaborator(GitHubHost.toHostUser(o.asObject()), o.get("permissions").get("push").asBoolean()))
+                .toList();
+    }
+
+    @Override
     public void addCollaborator(HostUser user, boolean canPush) {
         var query = JSON.object().put("permission", canPush ? "push" : "pull");
         request.put("collaborators/" + user.username())
                .body(query)
                .execute();
 
+    }
+
+    @Override
+    public void removeCollaborator(HostUser user) {
+        request.delete("collaborators/" + user.username()).execute();
     }
 
     @Override

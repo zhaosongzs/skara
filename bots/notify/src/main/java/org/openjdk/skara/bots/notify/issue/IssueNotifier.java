@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,7 +52,6 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
     private final boolean setFixVersion;
     private final LinkedHashMap<Pattern, String> fixVersions;
     private final LinkedHashMap<Pattern, List<Pattern>> altFixVersions;
-    private final JbsBackport jbsBackport;
     private final boolean prOnly;
     private final boolean repoOnly;
     private final String buildName;
@@ -89,13 +88,15 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
     private CensusInstance census = null;
 
     private boolean backportCreated = false;
+    // If true, avoid creating a "forward backport" when creating a new backport
+    private boolean avoidForwardports;
 
     IssueNotifier(IssueProject issueProject, boolean reviewLink, URI reviewIcon, boolean commitLink, URI commitIcon,
                   boolean setFixVersion, LinkedHashMap<Pattern, String> fixVersions, LinkedHashMap<Pattern, List<Pattern>> altFixVersions,
-                  JbsBackport jbsBackport, boolean prOnly, boolean repoOnly, String buildName,
+                  boolean prOnly, boolean repoOnly, String buildName,
                   HostedRepository censusRepository, String censusRef, String namespace, boolean useHeadVersion,
                   HostedRepository originalRepository, boolean resolve, Set<String> tagIgnoreOpt,
-                  boolean tagMatchPrefix, List<BranchSecurity> defaultSecurity) {
+                  boolean tagMatchPrefix, List<BranchSecurity> defaultSecurity, boolean avoidForwardports) {
         this.issueProject = issueProject;
         this.reviewLink = reviewLink;
         this.reviewIcon = reviewIcon;
@@ -104,7 +105,6 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
         this.setFixVersion = setFixVersion;
         this.fixVersions = fixVersions;
         this.altFixVersions = altFixVersions;
-        this.jbsBackport = jbsBackport;
         this.prOnly = prOnly;
         this.repoOnly = repoOnly;
         this.buildName = buildName;
@@ -117,6 +117,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
         this.tagIgnoreOpt = tagIgnoreOpt;
         this.tagMatchPrefix = tagMatchPrefix;
         this.defaultSecurity = defaultSecurity;
+        this.avoidForwardports = avoidForwardports;
     }
 
     static IssueNotifierBuilder newBuilder() {
@@ -196,8 +197,8 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
             var issue = optionalIssue.get();
 
             if (commitLink) {
-                var linkBuilder = Link.create(repository.webUrl(hash), "Commit")
-                                      .summary(repository.name() + "/" + hash.abbreviate());
+                var linkBuilder = Link.create(repository.webUrl(hash), "Commit(" + pr.targetRef() + ")")
+                        .summary(repository.name() + "/" + hash.abbreviate());
                 if (commitIcon != null) {
                     linkBuilder.iconTitle("Commit");
                     linkBuilder.iconUrl(commitIcon);
@@ -215,13 +216,58 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
                 }
                 if (issue.assignees().isEmpty()) {
                     var username = findIssueUsername(commit, scratchPath);
-                    if (username.isPresent()) {
-                        var assignee = issueProject.issueTracker().user(username.get());
-                        assignee.ifPresent(hostUser -> issue.setAssignees(List.of(hostUser)));
-                    }
+                    username.ifPresent(s -> setAssigneeForIssue(issue, s));
                 }
             }
         }
+    }
+
+    private void setAssigneeForIssue(IssueTrackerIssue issue, String username) {
+        var assignee = issueProject.issueTracker().user(username);
+        if (assignee.isPresent()) {
+            if (assignee.get().active()) {
+                log.info("Setting assignee for issue " + issue.id() + " to " + assignee.get());
+                issue.setAssignees(List.of(assignee.get()));
+            } else {
+                log.warning("Skipping setting assignee for issue " + issue.id() + " to " + assignee.get() + " because the user is inactive");
+            }
+        }
+    }
+
+    public void onTargetBranchChange(PullRequest pr, Path scratchPath, org.openjdk.skara.vcs.openjdk.Issue issue) {
+        var realIssue = issueProject.issue(issue.shortId());
+        if (realIssue.isEmpty()) {
+            log.warning("Pull request " + pr + " added unknown issue: " + issue.id());
+            return;
+        }
+
+        if (reviewLink) {
+            // Remove the previous link
+            removeReviewLink(pr, realIssue.get());
+            // Add a new link
+            addReviewLink(pr, realIssue.get());
+        }
+
+        log.info("Updating review link comment to issue " + realIssue.get().id());
+        PullRequestUtils.postPullRequestLinkComment(realIssue.get(), pr);
+    }
+
+    private void addReviewLink(PullRequest pr, IssueTrackerIssue realIssue) {
+        var linkBuilder = Link.create(pr.webUrl(), "Review(" + pr.targetRef() + ")")
+                .summary(pr.repository().name() + "/" + pr.id());
+        if (reviewIcon != null) {
+            linkBuilder.iconTitle("Review");
+            linkBuilder.iconUrl(reviewIcon);
+        }
+
+        log.info("Adding review link to issue " + realIssue.id());
+        realIssue.addLink(linkBuilder.build());
+    }
+
+    private void removeReviewLink(PullRequest pr, IssueTrackerIssue realIssue) {
+        log.info("Removing review links from issue " + realIssue.id());
+        var link = Link.create(pr.webUrl(), "").build();
+        realIssue.removeLink(link);
     }
 
     @Override
@@ -233,15 +279,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
         }
 
         if (reviewLink) {
-            var linkBuilder = Link.create(pr.webUrl(), "Review")
-                                  .summary(pr.repository().name() + "/" + pr.id());
-            if (reviewIcon != null) {
-                linkBuilder.iconTitle("Review");
-                linkBuilder.iconUrl(reviewIcon);
-            }
-
-            log.info("Adding review link to issue " + realIssue.get().id());
-            realIssue.get().addLink(linkBuilder.build());
+            addReviewLink(pr, realIssue.get());
         }
 
         log.info("Adding review link comment to issue " + realIssue.get().id());
@@ -256,9 +294,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
             return;
         }
 
-        log.info("Removing review links from issue " + realIssue.get().id());
-        var link = Link.create(pr.webUrl(), "").build();
-        realIssue.get().removeLink(link);
+        removeReviewLink(pr, realIssue.get());
 
         PullRequestUtils.removePullRequestLinkComment(realIssue.get(), pr);
     }
@@ -267,7 +303,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
     public void onNewCommits(HostedRepository repository, Repository localRepository, Path scratchPath, List<Commit> commits, Branch branch) {
         for (var commit : commits) {
             var linkRepository = originalRepository != null ? originalRepository : repository;
-            var commitNotification = CommitFormatters.toTextBrief(linkRepository, commit);
+            var commitNotification = CommitFormatters.toTextBrief(linkRepository, commit, branch);
             var commitMessage = CommitMessageParsers.v1.parse(commit);
             var username = findIssueUsername(commit, scratchPath);
 
@@ -295,36 +331,40 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
                 // The actual issue to be updated can change depending on the fix version
                 if (setFixVersion) {
                     requestedVersion = getRequestedVersion(localRepository, commit, branch.name());
-                    if (requestedVersion != null) {
-                        var altFixedVersionIssue = findAltFixedVersionIssue(issue, branch);
-                        if (altFixedVersionIssue.isPresent()) {
-                            log.info("Found an already fixed backport " + altFixedVersionIssue.get().id() + " for " + issue.id()
-                                    + " with fixVersion " + Backports.mainFixVersion(altFixedVersionIssue.get()).orElseThrow());
-                            issue = altFixedVersionIssue.get();
-                            // Do not update fixVersion
-                            requestedVersion = null;
-                        } else {
-                            var fixVersion = JdkVersion.parse(requestedVersion).orElseThrow();
-                            var existing = Backports.findIssue(issue, fixVersion);
-                            if (existing.isEmpty()) {
-                                log.info("Creating new backport for " + issue.id() + " with fixVersion " + requestedVersion);
-                                try {
-                                    issue = jbsBackport.createBackport(issue, requestedVersion, username.orElse(null), defaultSecurity(branch));
-                                } catch (UncheckedRestException e) {
-                                    existing = Backports.findIssue(issue, fixVersion);
-                                    if (existing.isPresent()) {
-                                        log.info("Race condition occurred while creating backport issue, returning the existing backport for " + issue.id() + " and requested fixVersion "
-                                                + requestedVersion + " " + existing.get().id());
-                                        issue = existing.get();
-                                    } else {
-                                        throw e;
-                                    }
+                    var altFixedVersionIssue = findAltFixedVersionIssue(issue, branch);
+                    if (altFixedVersionIssue.isPresent()) {
+                        log.info("Found an already fixed backport " + altFixedVersionIssue.get().id() + " for " + issue.id()
+                                + " with fixVersion " + Backports.mainFixVersion(altFixedVersionIssue.get()).orElseThrow());
+                        issue = altFixedVersionIssue.get();
+                        // Do not update fixVersion
+                        requestedVersion = null;
+                    } else if (requestedVersion != null) {
+                        var fixVersion = JdkVersion.parse(requestedVersion).orElseThrow();
+                        var existing = Backports.findIssue(issue, fixVersion);
+                        if (existing.isEmpty()) {
+                            var issueFixVersion = Backports.mainFixVersion(issue);
+                            try {
+                                if (issue.isOpen() && avoidForwardports && issueFixVersion.isPresent() && fixVersion.compareTo(issueFixVersion.get()) > 0) {
+                                    log.info("Avoiding 'forwardport', creating new backport for " + issue.id() + " with fixVersion " + issueFixVersion.get().raw());
+                                    Backports.createBackport(issue, issueFixVersion.get().raw(), username.orElse(null), defaultSecurity(branch));
+                                } else {
+                                    log.info("Creating new backport for " + issue.id() + " with fixVersion " + requestedVersion);
+                                    issue = Backports.createBackport(issue, requestedVersion, username.orElse(null), defaultSecurity(branch));
                                 }
-                            } else {
-                                log.info("Found existing backport for " + issue.id() + " and requested fixVersion "
-                                        + requestedVersion + " " + existing.get().id());
-                                issue = existing.get();
+                            } catch (UncheckedRestException e) {
+                                existing = Backports.findIssue(issue, fixVersion);
+                                if (existing.isPresent()) {
+                                    log.info("Race condition occurred while creating backport issue, returning the existing backport for " + issue.id() + " and requested fixVersion "
+                                            + requestedVersion + " " + existing.get().id());
+                                    issue = existing.get();
+                                } else {
+                                    throw e;
+                                }
                             }
+                        } else {
+                            log.info("Found existing backport for " + issue.id() + " and requested fixVersion "
+                                    + requestedVersion + " " + existing.get().id());
+                            issue = existing.get();
                         }
                     }
                 }
@@ -340,6 +380,8 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
                     issue.addComment(commitNotification);
                 }
                 log.info("Resolving issue " + issue.id() + " from state " + issue.state());
+                // If the issue here was found by findAltFixedVersionIssue(), issue.isFixed() should return true,
+                // so issue notifier won't do anything to the issue except posting a comment
                 if (!issue.isFixed()) {
                     issue.setState(Issue.State.RESOLVED);
                 } else {
@@ -347,11 +389,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
                 }
                 if (issue.assignees().isEmpty()) {
                     if (username.isPresent()) {
-                        var assignee = issueProject.issueTracker().user(username.get());
-                        if (assignee.isPresent()) {
-                            log.info("Setting assignee for issue " + issue.id() + " to " + assignee.get());
-                            issue.setAssignees(List.of(assignee.get()));
-                        }
+                        setAssigneeForIssue(issue, username.get());
                     }
                 }
 
@@ -368,7 +406,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
                             }
                         }
                         log.info("Setting fixVersion for " + issue.id() + " to " + requestedVersion);
-                        issue.setProperty("fixVersions", JSON.of(requestedVersion));
+                        issue.setProperty("fixVersions", JSON.array().add(requestedVersion));
                     }
                 }
             }
@@ -475,25 +513,20 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
     }
 
     private boolean tagVersionMatchesFixVersion(JdkVersion fixVersion, JdkVersion tagVersion) {
-        if (fixVersion.equals(tagVersion)) {
+        // If the fix version has an opt string, check if it should be ignored, otherwise
+        // return false if it's not equal.
+        if (fixVersion.opt().isPresent() && !tagIgnoreOpt.contains(fixVersion.opt().get())
+                && !fixVersion.opt().equals(tagVersion.opt())) {
+            return false;
+        }
+        // At this point, if all the components are equal, we have a match
+        if (fixVersion.components().equals(tagVersion.components())) {
             return true;
         }
-        // If the fix version has an opt string that should be ignored, compare just the version
-        // component parts.
-        if (fixVersion.opt().isPresent()) {
-            if (tagIgnoreOpt.contains(fixVersion.opt().get())
-                    && fixVersion.components().equals(tagVersion.components())) {
-                return true;
-            }
-            // If the opt strings shouldn't be ignored, break early if they aren't matching
-            if (!fixVersion.opt().equals(tagVersion.opt())) {
-                return false;
-            }
-        }
-
+        // The fixVersion may have a prefix consisting of only lower case letters in the
+        // first component that is not present in the tagVersion.
+        // e.g. 'openjdk8u342' vs '8u342'
         if (!tagMatchPrefix) {
-            // The fixVersion may have a prefix in the first component that is not present
-            // in the tagVersion. e.g. 'openjdk8u342' vs '8u342'
             var fixComponents = fixVersion.components();
             var tagComponents = tagVersion.components();
             // Check that the rest of the components are equal
@@ -501,7 +534,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
                     && fixComponents.subList(1, fixComponents.size()).equals(tagComponents.subList(1, tagComponents.size()))) {
                 var fixFirst = fixComponents.get(0);
                 var tagFirst = tagComponents.get(0);
-                // Check if the first fixVersion component has a prefix consisting of only lower case letters
+                // Check if the first fixVersion component without the prefix matches
                 return fixFirst.matches("[a-z]+" + tagFirst);
             }
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,6 +54,11 @@ public class HgRepository implements Repository {
 
     public static void ignoreConfiguration() {
         currentEnv = NO_CONFIG_ENV;
+    }
+
+    @Override
+    public boolean isRemergeDiffEmpty(Hash mergeCommitHash) throws IOException {
+        throw new UnsupportedOperationException();
     }
 
     private void copyResource(String name, Path p) throws IOException {
@@ -246,6 +251,11 @@ public class HgRepository implements Repository {
         var ext = Files.createTempFile("ext", ".py");
         copyResource(EXT_PY, ext);
         return new HgCommits(dir, range, ext, reverse, n);
+    }
+
+    @Override
+    public Commits commits(List<Hash> reachableFrom, List<Hash> unreachableFrom) throws IOException {
+        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -453,16 +463,17 @@ public class HgRepository implements Repository {
 
     @Override
     public Repository reinitialize() throws IOException {
-        Files.walk(dir)
-             .map(Path::toFile)
-             .sorted(Comparator.reverseOrder())
-             .forEach(File::delete);
+        try (var paths = Files.walk(dir)) {
+            paths.map(Path::toFile)
+                 .sorted(Comparator.reverseOrder())
+                 .forEach(File::delete);
+        }
 
         return init();
     }
 
     @Override
-    public Hash fetch(URI uri, String refspec, boolean includeTags, boolean forceUpdateTags) throws IOException {
+    public Optional<Hash> fetch(URI uri, String refspec, boolean includeTags, boolean forceUpdateTags) throws IOException {
         // Ignore includeTags and forceUpdateTags, Mercurial always fetches tags
         return fetch(uri != null ? uri.toString() : null, refspec);
     }
@@ -479,7 +490,7 @@ public class HgRepository implements Repository {
         }
     }
 
-    private Hash fetch(String from, String refspec) throws IOException {
+    private Optional<Hash> fetch(String from, String refspec) throws IOException {
         var oldHeads = new HashSet<>(heads());
 
         var cmd = new ArrayList<String>();
@@ -503,9 +514,9 @@ public class HgRepository implements Repository {
             throw new IllegalStateException("fetching multiple heads is not supported");
         } else if (newHeads.size() == 0) {
             // no new head was fetched, return current head
-            return head();
+            return Optional.of(head());
         }
-        return newHeads.iterator().next();
+        return Optional.of(newHeads.iterator().next());
     }
 
     @Override
@@ -601,6 +612,11 @@ public class HgRepository implements Repository {
         try (var p = capture(cmd)) {
             await(p);
         }
+    }
+
+    @Override
+    public void push(String refspec, URI uri) throws IOException {
+        throw new RuntimeException("Refspec not supported with Mercurial");
     }
 
     @Override
@@ -804,6 +820,15 @@ public class HgRepository implements Repository {
     @Override
     public boolean isAncestor(Hash ancestor, Hash descendant) throws IOException {
         return mergeBase(ancestor, descendant).equals(ancestor);
+    }
+
+    /**
+     * Check if either a is an ancestor of b, or b is an ancestor of a.
+     * @return true if a and b are related
+     */
+    private boolean isRelated(Hash a, Hash b) throws IOException {
+        var base = mergeBase(a, b);
+        return base.equals(a) || base.equals(b);
     }
 
     @Override
@@ -1079,7 +1104,7 @@ public class HgRepository implements Repository {
         if (ff == FastForward.ONLY) {
             cmd = update;
         } else if (ff == FastForward.DISABLE) {
-            if (isAncestor(head, other)) {
+            if (isRelated(head, other)) {
                 cmd = debugsetparents;
             } else {
                 cmd = merge;
@@ -1087,6 +1112,8 @@ public class HgRepository implements Repository {
         } else if (ff == FastForward.AUTO) {
             if (isAncestor(head, other)) {
                 cmd = update;
+            } else if (isAncestor(other, head)) {
+                return;
             } else {
                 cmd = merge;
             }
@@ -1516,6 +1543,11 @@ public class HgRepository implements Repository {
     }
 
     @Override
+    public int commitCount(List<Branch> branches) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Hash initialHash() {
         return NULL_REVISION;
     }
@@ -1537,6 +1569,26 @@ public class HgRepository implements Repository {
 
     @Override
     public boolean isEmptyCommit(Hash hash) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void addNote(Hash hash,
+                        List<String> lines,
+                        String authorName,
+                        String authorEmail,
+                        String committerName,
+                        String committerEmail) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public List<String> notes(Hash hash) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void pushNotes(URI uri) throws IOException {
         throw new UnsupportedOperationException();
     }
 }

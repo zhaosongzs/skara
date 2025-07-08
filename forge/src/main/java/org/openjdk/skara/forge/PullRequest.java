@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,7 +50,7 @@ public interface PullRequest extends Issue {
     /**
      * Updates the comment body of a review.
      */
-    void updateReview(int id, String body);
+    void updateReview(String id, String body);
 
     /**
      * Add a file specific comment.
@@ -75,6 +75,15 @@ public interface PullRequest extends Issue {
      * @return
      */
     List<ReviewComment> reviewComments();
+
+    /**
+     * Get all file specific comments but potentially without file location data.
+     * This may save computation and I/O time if constructing that data is expensive.
+     * @return
+     */
+    default List<? extends Comment> reviewCommentsAsComments() {
+        return reviewComments();
+    }
 
     /**
      * Hash of the current head of the request.
@@ -155,8 +164,6 @@ public interface PullRequest extends Issue {
      * Returns a link that will lead to the list of changes with the specified base.
      */
     URI changeUrl(Hash base);
-
-    URI commentUrl(Comment comment);
 
     URI reviewCommentUrl(ReviewComment reviewComment);
 
@@ -249,7 +256,7 @@ public interface PullRequest extends Issue {
         var sortedEvents = events.stream()
                 .sorted(Comparator.comparing(ReferenceChange::at))
                 .toList();
-        var lastTargetRef = sortedEvents.get(events.size() - 1).to();
+        var lastTargetRef = sortedEvents.getLast().to();
         return reviews.stream().map(orig -> {
                     for (var event : sortedEvents) {
                         if (event.at().isAfter(orig.createdAt())

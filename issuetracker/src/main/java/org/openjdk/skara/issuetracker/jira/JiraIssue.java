@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,6 +45,7 @@ public class JiraIssue implements IssueTrackerIssue {
 
     private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ");
     private static final List<String> FILTER_OUT_FIELDS = List.of("fields.customfield_11700");
+    private static final List<String> VALID_RESOLUTIONS = List.of("Fixed", "Delivered");
 
     private List<Label> labels;
 
@@ -55,7 +56,7 @@ public class JiraIssue implements IssueTrackerIssue {
         this.labels = json.get("fields").get("labels").stream()
                 .map(s -> new Label(s.asString()))
                 .collect(Collectors.toList());
-        needSecurity = jiraProject.jiraHost().securityLevel().isPresent();
+        this.needSecurity = jiraProject.jiraHost().visibilityRole().isPresent();
     }
 
     @Override
@@ -87,9 +88,10 @@ public class JiraIssue implements IssueTrackerIssue {
     @Override
     public void setTitle(String title) {
         if (needSecurity) {
-            log.warning("Issue title does not support setting a security level - ignoring");
+            log.warning("Issue title does not support setting a visibility role - ignoring");
             return;
         }
+
         var query = JSON.object()
                         .put("fields", JSON.object()
                                            .put("summary", title));
@@ -108,9 +110,10 @@ public class JiraIssue implements IssueTrackerIssue {
     @Override
     public void setBody(String body) {
         if (needSecurity) {
-            log.warning("Issue body does not support setting a security level - ignoring");
+            log.warning("Issue body does not support setting a visibility role - ignoring");
             return;
         }
+
         var query = JSON.object()
                         .put("fields", JSON.object()
                                            .put("description", body));
@@ -169,6 +172,11 @@ public class JiraIssue implements IssueTrackerIssue {
     }
 
     @Override
+    public URI commentUrl(Comment comment) {
+        return URIBuilder.base(webUrl()).appendPath("?focusedCommentId=" + comment.id()).build();
+    }
+
+    @Override
     public ZonedDateTime createdAt() {
         return ZonedDateTime.parse(json.get("fields").get("created").asString(), dateFormat);
     }
@@ -216,7 +224,7 @@ public class JiraIssue implements IssueTrackerIssue {
         if (isResolved() || isClosed()) {
             var resolution = json.get("fields").get("resolution");
             if (!resolution.isNull()) {
-                return "Fixed".equals(resolution.get("name").asString());
+                return VALID_RESOLUTIONS.contains(resolution.get("name").asString());
             }
         }
         return false;
@@ -242,6 +250,10 @@ public class JiraIssue implements IssueTrackerIssue {
     public void setState(State state) {
         var availableTransitions = availableTransitions();
 
+        if (availableTransitions.isEmpty()) {
+            throw new RuntimeException("Available transition states is empty");
+        }
+
         // Handle special cases
         if (state == State.RESOLVED) {
             if (!availableTransitions.containsKey("Resolved")) {
@@ -253,6 +265,7 @@ public class JiraIssue implements IssueTrackerIssue {
                     }
                 } else {
                     // The issue is most likely closed - skip transitioning
+                    log.warning("Can't transition the issue to Resolved or Open");
                     return;
                 }
             }

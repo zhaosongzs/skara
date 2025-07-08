@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,6 +22,7 @@
  */
 package org.openjdk.skara.webrev;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.openjdk.skara.test.TemporaryDirectory;
 import org.openjdk.skara.test.TestableRepository;
 import org.openjdk.skara.vcs.*;
@@ -30,12 +31,28 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class WebrevTests {
+
+    private static boolean hgAvailable = true;
+
+    @BeforeAll
+    static void checkHgAvailability() {
+        try {
+            var pb = new ProcessBuilder("hg", "--version");
+            pb.redirectErrorStream(true);
+            var process = pb.start();
+            process.waitFor();
+            hgAvailable = (process.exitValue() == 0);
+        } catch (Exception e) {
+            hgAvailable = false;
+        }
+    }
+
     void assertContains(Path file, String text) throws IOException {
         var contents = Files.readString(file).replaceAll("\\R", "\n");
         assertTrue(contents.contains(text));
@@ -43,15 +60,16 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void simple(VCS vcs) throws IOException {
+    void simple(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var repoFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory()) {
             var repo = TestableRepository.init(repoFolder.path(), vcs);
             var file = repoFolder.path().resolve("x.txt");
-            Files.writeString(file, "1\n2\n3\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n");
             repo.add(file);
             var hash1 = repo.commit("Commit", "a", "a@a.a");
-            Files.writeString(file, "1\n2\n3\n4\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n4\n");
             repo.add(file);
             var hash2 = repo.commit("Commit 2", "a", "a@a.a");
 
@@ -63,15 +81,16 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void middle(VCS vcs) throws IOException {
+    void middle(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var repoFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory()) {
             var repo = TestableRepository.init(repoFolder.path(), vcs);
             var file = repoFolder.path().resolve("x.txt");
-            Files.writeString(file, "1\n2\n3\n4\n5\n6\n7\n8\n9\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n4\n5\n6\n7\n8\n9\n");
             repo.add(file);
             var hash1 = repo.commit("Commit", "a", "a@a.a");
-            Files.writeString(file, "1\n2\n3\n4\n5\n5.1\n5.2\n6\n7\n8\n9\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n4\n5\n5.1\n5.2\n6\n7\n8\n9\n");
             repo.add(file);
             var hash2 = repo.commit("Commit 2", "a", "a@a.a");
 
@@ -82,15 +101,16 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void emptySourceHunk(VCS vcs) throws IOException {
+    void emptySourceHunk(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var repoFolder = new TemporaryDirectory();
         var webrevFolder = new TemporaryDirectory()) {
             var repo = TestableRepository.init(repoFolder.path(), vcs);
             var file = repoFolder.path().resolve("x.txt");
-            Files.writeString(file, "1\n2\n3\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n");
             repo.add(file);
             var hash1 = repo.commit("Commit", "a", "a@a.a");
-            Files.writeString(file, "0\n1\n2\n3\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "0\n1\n2\n3\n");
             repo.add(file);
             var hash2 = repo.commit("Commit 2", "a", "a@a.a");
 
@@ -101,15 +121,16 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void removedHeader(VCS vcs) throws IOException {
+    void removedHeader(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var repoFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory()) {
             var repo = TestableRepository.init(repoFolder.path(), vcs);
             var file = repoFolder.path().resolve("x.txt");
-            Files.writeString(file, "1\n2\n3\n4\n5\n6\n7\n8\n9\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n4\n5\n6\n7\n8\n9\n");
             repo.add(file);
             var hash1 = repo.commit("Commit", "a", "a@a.a");
-            Files.writeString(file, "5\n6\n7\n8\n9\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "5\n6\n7\n8\n9\n");
             repo.add(file);
             var hash2 = repo.commit("Commit 2", "a", "a@a.a");
 
@@ -120,7 +141,8 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void removeBinaryFile(VCS vcs) throws IOException {
+    void removeBinaryFile(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var tmp = new TemporaryDirectory()) {
             var repo = TestableRepository.init(tmp.path().resolve("repo"), vcs);
             var binaryFile = repo.root().resolve("x.jpg");
@@ -137,7 +159,8 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void addBinaryFile(VCS vcs) throws IOException {
+    void addBinaryFile(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var tmp = new TemporaryDirectory()) {
             var repo = TestableRepository.init(tmp.path().resolve("repo"), vcs);
             var readme = repo.root().resolve("README");
@@ -157,7 +180,8 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void modifyBinaryFile(VCS vcs) throws IOException {
+    void modifyBinaryFile(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var tmp = new TemporaryDirectory()) {
             var repo = TestableRepository.init(tmp.path().resolve("repo"), vcs);
             var readme = repo.root().resolve("README");
@@ -178,15 +202,16 @@ class WebrevTests {
 
     @ParameterizedTest
     @EnumSource(VCS.class)
-    void reservedName(VCS vcs) throws IOException {
+    void reservedName(VCS vcs) throws IOException, DiffTooLargeException {
+        assumeFalse(vcs == VCS.HG && !hgAvailable);
         try (var repoFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory()) {
             var repo = TestableRepository.init(repoFolder.path(), vcs);
             var file = repoFolder.path().resolve("index.html");
-            Files.writeString(file, "1\n2\n3\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n");
             repo.add(file);
             var hash1 = repo.commit("Commit", "a", "a@a.a");
-            Files.writeString(file, "1\n2\n3\n4\n", StandardCharsets.UTF_8);
+            Files.writeString(file, "1\n2\n3\n4\n");
             repo.add(file);
             var hash2 = repo.commit("Commit 2", "a", "a@a.a");
 

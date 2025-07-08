@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@ import java.net.URI;
 import java.nio.file.*;
 import java.time.*;
 import java.util.*;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class HostedRepositoryPool {
@@ -45,6 +44,7 @@ public class HostedRepositoryPool {
     private class HostedRepositoryInstance {
         private final HostedRepository hostedRepository;
         private final Path seed;
+        private static Set<Path> healthySet = new HashSet<>();
 
         private HostedRepositoryInstance(HostedRepository hostedRepository) {
             this.hostedRepository = hostedRepository;
@@ -52,9 +52,8 @@ public class HostedRepositoryPool {
         }
 
         private void clearDirectory(Path directory) {
-            try {
-                Files.walk(directory)
-                     .map(Path::toFile)
+            try (var paths = Files.walk(directory)) {
+                paths.map(Path::toFile)
                      .sorted(Comparator.reverseOrder())
                      .forEach(File::delete);
             } catch (IOException io) {
@@ -121,22 +120,16 @@ public class HostedRepositoryPool {
             }
             Repository.clone(remote, tmpClonePath, bare, seed);
             Files.move(tmpClonePath, path);
+            if (Repository.get(path).isPresent()) {
+                healthySet.add(path);
+            }
             return Repository.get(path).orElseThrow();
         }
 
         private void removeOldClone(Path path, String reason) {
             if (Files.exists(path)) {
-                var preserved = path.resolveSibling(path.getFileName().toString() + "-" + reason + "-" + UUID.randomUUID());
-                log.severe("Invalid local repository detected (" + reason + ") - preserved in: " + preserved);
-                try {
-                    Files.move(path, preserved);
-                } catch (IOException e) {
-                    log.log(Level.SEVERE, "Failed to preserve old clone at " + path, e);
-                } finally {
-                    if (Files.exists(path)) {
-                        clearDirectory(path);
-                    }
-                }
+                log.severe("Invalid local repository " + path + " detected (" + reason + ")");
+                clearDirectory(path);
             }
         }
 
@@ -147,7 +140,7 @@ public class HostedRepositoryPool {
                 return cloneSeeded(path, allowStale, bare);
             } else {
                 var localRepoInstance = localRepo.get();
-                if (!localRepoInstance.isHealthy()) {
+                if (!isHealthy(localRepoInstance, path)) {
                     removeOldClone(path, "unhealthy");
                     return cloneSeeded(path, allowStale, bare);
                 } else {
@@ -162,6 +155,18 @@ public class HostedRepositoryPool {
                         return cloneSeeded(path, allowStale, bare);
                     }
                 }
+            }
+        }
+
+        private boolean isHealthy(Repository localRepoInstance, Path path) throws IOException {
+            if (healthySet.contains(path)) {
+                return true;
+            } else {
+                boolean isHealthy = localRepoInstance.isHealthy();
+                if (isHealthy) {
+                    healthySet.add(path);
+                }
+                return isHealthy;
             }
         }
     }
@@ -181,7 +186,7 @@ public class HostedRepositoryPool {
         var localClone = hostedRepositoryInstance.materializeClone(path, true, false);
         var remote = allowStale ? hostedRepositoryInstance.seedUri() : hostedRepository.authenticatedUrl();
         log.info("Updating local repository from: " + remote);
-        var refHash = localClone.fetch(remote, "+" + ref + ":hostedrepositorypool", true, true);
+        var refHash = localClone.fetch(remote, "+" + ref + ":hostedrepositorypool", true, true).orElseThrow();
         try {
             localClone.checkout(refHash, true);
         } catch (IOException e) {

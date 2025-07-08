@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,7 +54,7 @@ public class BackportPRCommandTests {
                     .repo(bot)
                     .censusRepo(censusBuilder.build())
                     .seedStorage(seedFolder)
-                    .forks(Map.of("targetRepo", targetRepo, "targetRepo2", targetRepo2))
+                    .forks(Map.of("targetRepo", targetRepo, "targetRepo2", targetRepo2, "test", author))
                     .build();
 
             // Populate the projects repository
@@ -89,13 +89,25 @@ public class BackportPRCommandTests {
             assertLastCommentContains(pr, "Backport for repo `targetRepo2` on branch `dev` was successfully enabled");
             assertTrue(pr.store().labelNames().contains("backport=targetRepo2:dev"));
 
-            // disable backport for targetRepo on master
+            // Enable backport for test on master
+            pr.addComment("/backport :master");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertLastCommentContains(pr, "Backport for repo `test` on branch `master` was successfully enabled");
+            assertTrue(pr.store().labelNames().contains("backport=test:master"));
+
+            // Disable backport for test on master
+            pr.addComment("/backport disable test:master");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertLastCommentContains(pr, "Backport for repo `test` on branch `master` was successfully disabled");
+            assertFalse(pr.store().labelNames().contains("backport=test:master"));
+
+            // Disable backport for targetRepo on master
             reviewerPr.addComment("/backport disable targetRepo");
             TestBotRunner.runPeriodicItems(prBot);
             assertLastCommentContains(pr, "Backport for repo `targetRepo` on branch `master` was successfully disabled.");
             assertFalse(pr.store().labelNames().contains("backport=targetRepo:master"));
 
-            // disable backport for targetRepo again
+            // Disable backport for targetRepo again
             reviewerPr.addComment("/backport disable targetRepo");
             TestBotRunner.runPeriodicItems(prBot);
             assertLastCommentContains(pr, "Backport for repo `targetRepo` on branch `master` was already disabled.");
@@ -120,6 +132,7 @@ public class BackportPRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertLastCommentContains(pr, "@user2");
             assertLastCommentContains(pr, "Could **not** automatically backport");
+            assertLastCommentContains(pr, "Below you can find a suggestion for the pull request body:");
 
             // Resolve conflict
             localRepo.push(masterHash, targetRepo.authenticatedUrl(), "master", true);
@@ -162,7 +175,9 @@ public class BackportPRCommandTests {
             localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
             var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
 
-            //close the pr
+            TestBotRunner.runPeriodicItems(prBot);
+
+            // Close the pr
             pr.store().setState(Issue.State.CLOSED);
             pr.addComment("/backport targetRepo");
             TestBotRunner.runPeriodicItems(prBot);

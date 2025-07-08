@@ -23,8 +23,8 @@
 package org.openjdk.skara.test;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.*;
+
 import org.openjdk.skara.forge.*;
 import org.openjdk.skara.host.HostUser;
 import org.openjdk.skara.issuetracker.Issue;
@@ -34,7 +34,6 @@ import org.openjdk.skara.vcs.*;
 
 import java.io.*;
 import java.net.*;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.*;
@@ -47,11 +46,12 @@ public class TestHostedRepository extends TestIssueProject implements HostedRepo
     private final Repository localRepository;
     private final Pattern pullRequestPattern;
     private final Map<Hash, List<CommitComment>> commitComments;
-    private Map<String, Boolean> collaborators = new HashMap<>();
-    private List<Label> labels = new ArrayList<>();
+    private final List<Collaborator> collaborators = new ArrayList<>();
+    private final List<Label> labels = new ArrayList<>();
     private final Set<Check> checks = new HashSet<>();
     private final Set<String> protectedBranchPatterns = new HashSet<>();
-    private Map<String, ZonedDateTime> deployKeys = new HashMap<>();
+    private final Map<String, ZonedDateTime> deployKeys = new HashMap<>();
+    private String namespace = "test";
 
     public TestHostedRepository(TestHost host, String projectName, Repository localRepository) {
         super(host, projectName);
@@ -161,6 +161,15 @@ public class TestHostedRepository extends TestIssueProject implements HostedRepo
     }
 
     @Override
+    public String group() {
+        if (projectName.contains("/")) {
+            return projectName.split("/")[0];
+        } else {
+            return "";
+        }
+    }
+
+    @Override
     public URI authenticatedUrl() {
         try {
             // We need a URL without a trailing slash
@@ -219,12 +228,26 @@ public class TestHostedRepository extends TestIssueProject implements HostedRepo
     }
 
     @Override
-    public void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail) {
+    public void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail, boolean createNewFile) {
         try {
             localRepository.checkout(branch);
             Path absPath = localRepository.root().resolve(filename);
             Files.createDirectories(absPath.getParent());
-            Files.writeString(absPath, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+            if (createNewFile) {
+                // Attempt to create a new file, throw exception if it already exists
+                if (Files.exists(absPath)) {
+                    throw new FileAlreadyExistsException("File already exists: " + absPath);
+                }
+                Files.writeString(absPath, content, StandardOpenOption.CREATE_NEW);
+            } else {
+                // Attempt to update an existing file, throw exception if it doesn't exist
+                if (!Files.exists(absPath)) {
+                    throw new NoSuchFileException("File does not exist: " + absPath);
+                }
+                Files.writeString(absPath, content, StandardOpenOption.TRUNCATE_EXISTING);
+            }
+
             localRepository.add(absPath);
             var hash = localRepository.commit(message, authorName, authorEmail);
             // Don't leave the repository having a branch checked out as that would
@@ -237,7 +260,14 @@ public class TestHostedRepository extends TestIssueProject implements HostedRepo
 
     @Override
     public String namespace() {
-        return "test";
+        return namespace;
+    }
+
+    /**
+     * Allow tests to user a different namespace
+     */
+    public void setNamespace(String namespace) {
+        this.namespace = namespace;
     }
 
     @Override
@@ -275,6 +305,11 @@ public class TestHostedRepository extends TestIssueProject implements HostedRepo
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public String defaultBranchName() {
+        return "master";
     }
 
     @Override
@@ -393,13 +428,30 @@ public class TestHostedRepository extends TestIssueProject implements HostedRepo
     }
 
     @Override
+    public List<Collaborator> collaborators() {
+        return collaborators;
+    }
+
+    @Override
     public void addCollaborator(HostUser user, boolean canPush) {
-        collaborators.put(user.username(), canPush);
+        collaborators.add(new Collaborator(user, canPush));
+    }
+
+    @Override
+    public void removeCollaborator(HostUser user) {
+        var toRemove = collaborators.stream()
+                .filter(c -> c.user().equals(user))
+                .toList();
+        toRemove.forEach(collaborators::remove);
     }
 
     @Override
     public boolean canPush(HostUser user) {
-        return collaborators.getOrDefault(user.username(), false);
+        return collaborators.stream()
+                .filter(c -> c.user().equals(user))
+                .findFirst()
+                .map(Collaborator::canPush)
+                .orElse(false);
     }
 
     @Override

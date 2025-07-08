@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,7 +63,10 @@ public class BackportCommitCommandTests {
             // Make a change in another branch
             var editHash = CheckableRepository.appendAndCommit(localRepo);
             localRepo.push(editHash, author.authenticatedUrl(), "edit");
-
+            // Create more branches
+            for (int i = 1; i <= 20; i++) {
+                localRepo.push(editHash, author.authenticatedUrl(), "jdk" + i, true);
+            }
             // Add a backport command
             author.addCommitComment(editHash, "/backport " + author.name());
             TestBotRunner.runPeriodicItems(bot);
@@ -77,6 +80,38 @@ public class BackportCommitCommandTests {
             assertTrue(botReply.body().contains("with this backport"));
             assertTrue(botReply.body().contains("@" + botReply.author().username()));
             assertEquals(botReply.body().indexOf("@" + botReply.author().username()), botReply.body().lastIndexOf("@" + botReply.author().username()));
+
+            // Add a backport command
+            author.addCommitComment(editHash, "/backport " + author.name() + ":" + author.defaultBranchName());
+            TestBotRunner.runPeriodicItems(bot);
+            recentCommitComments = author.recentCommitComments();
+            assertEquals(4, recentCommitComments.size());
+            botReply = recentCommitComments.get(0);
+            assertTrue(botReply.body().contains("To create a pull request with this backport targeting " +
+                    "[" + author.name() + ":" + author.defaultBranchName() + "]"));
+
+            // Add a backport command
+            author.addCommitComment(editHash, "/backport :" + author.defaultBranchName());
+            TestBotRunner.runPeriodicItems(bot);
+            recentCommitComments = author.recentCommitComments();
+            assertEquals(6, recentCommitComments.size());
+            botReply = recentCommitComments.get(0);
+            assertTrue(botReply.body().contains("To create a pull request with this backport targeting " +
+                    "[" + author.name() + ":" + author.defaultBranchName() + "]"));
+
+            author.addCommitComment(editHash, "/backport jdk11");
+            TestBotRunner.runPeriodicItems(bot);
+            recentCommitComments = author.recentCommitComments();
+            assertEquals(8, recentCommitComments.size());
+            botReply = recentCommitComments.get(0);
+            assertTrue(botReply.body().contains("There is a branch `jdk11` in the current repository `test`."));
+
+            author.addCommitComment(editHash, "/backport :jdk31");
+            TestBotRunner.runPeriodicItems(bot);
+            recentCommitComments = author.recentCommitComments();
+            assertEquals(10, recentCommitComments.size());
+            botReply = recentCommitComments.get(0);
+            assertTrue(botReply.body().contains("List of valid branches:"));
         }
     }
 
@@ -117,7 +152,7 @@ public class BackportCommitCommandTests {
             var botReply = recentCommitComments.get(0);
             assertTrue(botReply.body().contains("target repository"));
             assertTrue(botReply.body().contains("is not a valid target for backports"));
-            assertTrue(botReply.body().contains("List of valid target repositories: foobar/other-repo, test"));
+            assertTrue(botReply.body().contains("List of valid target repositories: `foobar/other-repo`, `test`"));
             assertEquals(List.of(), author.openPullRequests());
         }
     }
@@ -158,7 +193,7 @@ public class BackportCommitCommandTests {
             assertEquals(2, recentCommitComments.size());
             var botReply = recentCommitComments.get(0);
             assertTrue(botReply.body().contains("is not a valid target for backports"));
-            assertTrue(botReply.body().contains("List of valid target repositories: foobar/other-repo"));
+            assertTrue(botReply.body().contains("List of valid target repositories: `foobar/other-repo`"));
             assertEquals(List.of(), author.openPullRequests());
         }
     }
@@ -252,6 +287,7 @@ public class BackportCommitCommandTests {
             assertTrue(botReply.body().contains("Please fetch the appropriate branch/commit and manually resolve these conflicts"));
             assertTrue(botReply.body().contains("master:master"));
             assertTrue(botReply.body().contains("$ git checkout master"));
+            assertTrue(botReply.body().contains("Below you can find a suggestion for the pull request body:"));
             assertEquals(List.of(), author.openPullRequests());
         }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@ import org.openjdk.skara.vcs.Branch;
 
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -127,7 +126,7 @@ public class IssueNotifierTests {
             TestBotRunner.runPeriodicItems(notifyBot);
 
             // Save the state
-            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history");
+            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
 
             // Create an issue and commit a fix
             var issue = issueProject.createIssue("This is an issue", List.of("Indeed"), Map.of("issuetype", JSON.of("Enhancement")));
@@ -144,7 +143,7 @@ public class IssueNotifierTests {
             assertEquals(1, links.size());
             var link = links.get(0);
             assertEquals(commitIcon, link.iconUrl().orElseThrow());
-            assertEquals("Commit", link.title().orElseThrow());
+            assertEquals("Commit(master)", link.title().orElseThrow());
             assertEquals(repo.webUrl(editHash), link.uri().orElseThrow());
 
             // Wipe the history
@@ -764,7 +763,7 @@ public class IssueNotifierTests {
             assertEquals(List.of(issueProject.issueTracker().currentUser()), updatedIssue.assignees());
 
             // Restore the history to simulate looking at another repository
-            localRepo.fetch(repo.authenticatedUrl(), "history");
+            localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
             localRepo.push(blankHistory, repo.authenticatedUrl(), "history", true);
 
             // When the second notifier sees it, it should upgrade the build name
@@ -774,7 +773,7 @@ public class IssueNotifierTests {
             assertEquals("master", updatedIssue.properties().get(RESOLVED_IN_BUILD).asString());
 
             // Restore the history to simulate looking at another repository
-            localRepo.fetch(repo.authenticatedUrl(), "history");
+            localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
             localRepo.push(blankHistory, repo.authenticatedUrl(), "history", true);
 
             // When the third notifier sees it, it should switch to a build number
@@ -784,7 +783,7 @@ public class IssueNotifierTests {
             assertEquals("b04", updatedIssue.properties().get(RESOLVED_IN_BUILD).asString());
 
             // Restore the history to simulate looking at another repository
-            localRepo.fetch(repo.authenticatedUrl(), "history");
+            localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
             localRepo.push(blankHistory, repo.authenticatedUrl(), "history", true);
 
             // When the fourth notifier sees it, it should switch to a lower build number
@@ -794,7 +793,7 @@ public class IssueNotifierTests {
             assertEquals("b02", updatedIssue.properties().get(RESOLVED_IN_BUILD).asString());
 
             // Restore the history to simulate looking at another repository
-            localRepo.fetch(repo.authenticatedUrl(), "history");
+            localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
             localRepo.push(blankHistory, repo.authenticatedUrl(), "history", true);
 
             // When the fifth notifier sees it, it should NOT switch to a higher build number
@@ -977,6 +976,52 @@ public class IssueNotifierTests {
             backportIssue = issueProject.issue(backportIssue.id()).orElseThrow();
             assertEquals("b08", backportIssue.properties().get(RESOLVED_IN_BUILD).asString());
             assertEquals("team", updatedIssue.properties().get(RESOLVED_IN_BUILD).asString());
+        }
+    }
+
+    @Test
+    void testTagIgnorePrefixAndOpt(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType());
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var issueProject = credentials.getIssueProject();
+            var storageFolder = tempFolder.path().resolve("storage");
+            var jbsNotifierConfig = JSON.object().put("fixversions", JSON.object()
+                            .put("master", "foo16-bar"))
+                    .put("buildname", "team")
+                    .put("tag", JSON.object().put("ignoreopt", JSON.array().add("bar")));
+            var notifyBot = testBotBuilder(repo, issueProject, storageFolder, jbsNotifierConfig).create("notify", JSON.object());
+
+            // Initialize history
+            var current = localRepo.resolve("master").orElseThrow();
+            localRepo.push(current, repo.authenticatedUrl(), "other");
+            localRepo.tag(current, "jdk-16+9", "First tag", "duke", "duke@openjdk.org");
+            localRepo.push(new Branch(repo.authenticatedUrl().toString()), "--tags", false);
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Create an issue and commit a fix
+            var authorEmailAddress = issueProject.issueTracker().currentUser().username() + "@openjdk.org";
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"), Map.of("issuetype", JSON.of("Enhancement")));
+            issue.setProperty("fixVersions", JSON.of("foo16-bar"));
+            issue.setState(RESOLVED);
+            issue.setProperty(RESOLVED_IN_BUILD, JSON.of("master"));
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue", "Duke", authorEmailAddress);
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+
+            // Tag it
+            localRepo.tag(editHash, "16+1", "Second tag", "duke", "duke@openjdk.org");
+            localRepo.push(new Branch(repo.authenticatedUrl().toString()), "--tags", false);
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The build should now be updated
+            var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
+            assertEquals("b01", updatedIssue.properties().get(RESOLVED_IN_BUILD).asString());
         }
     }
 
@@ -1311,12 +1356,12 @@ public class IssueNotifierTests {
             localRepo.push(new Branch(repo.authenticatedUrl().toString()), "--tags", false);
 
             // Claim that it is already processed
-            localRepo.fetch(repo.authenticatedUrl(), "+history:history");
+            localRepo.fetch(repo.authenticatedUrl(), "+history:history").orElseThrow();
             localRepo.checkout(new Branch("history"), true);
             var historyFile = repoFolder.resolve("test.tags.txt");
-            var processed = new ArrayList<>(Files.readAllLines(historyFile, StandardCharsets.UTF_8));
+            var processed = new ArrayList<>(Files.readAllLines(historyFile));
             processed.add("jdk-16+10 issue done");
-            Files.writeString(historyFile, String.join("\n", processed), StandardCharsets.UTF_8);
+            Files.writeString(historyFile, String.join("\n", processed));
             localRepo.add(historyFile);
             var updatedHash = localRepo.commit("Marking jdk-16+10 as done", "duke", "duke@openjdk.org");
             localRepo.push(updatedHash, repo.authenticatedUrl(), "history");
@@ -1329,9 +1374,9 @@ public class IssueNotifierTests {
             assertEquals("b110", updatedIssue.properties().get(RESOLVED_IN_BUILD).asString());
 
             // Flag it as in need of retry
-            processed.remove(processed.size() - 1);
+            processed.removeLast();
             processed.add("jdk-16+10 issue retry");
-            Files.writeString(repoFolder.resolve("test.tags.txt"), String.join("\n", processed), StandardCharsets.UTF_8);
+            Files.writeString(repoFolder.resolve("test.tags.txt"), String.join("\n", processed));
             localRepo.add(historyFile);
             var retryHash = localRepo.commit("Marking jdk-16+10 as needing retry", "duke", "duke@openjdk.org");
             localRepo.push(retryHash, repo.authenticatedUrl(), "history");
@@ -1552,7 +1597,7 @@ public class IssueNotifierTests {
             TestBotRunner.runPeriodicItems(notifyBot);
 
             // Save the state
-            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history");
+            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
 
             // Create an issue and commit a fix
             var issue = issueProject.createIssue("This is an issue", List.of("Indeed"), Map.of("issuetype", JSON.of("Enhancement")));
@@ -1607,7 +1652,7 @@ public class IssueNotifierTests {
             TestBotRunner.runPeriodicItems(notifyBot);
 
             // Save the state
-            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history");
+            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
 
             // Create an issue and commit a fix
             var issue = issueProject.createIssue("This is an issue", List.of("Indeed"), Map.of("issuetype", JSON.of("Enhancement")));
@@ -1616,7 +1661,7 @@ public class IssueNotifierTests {
 
             // Add a comment for the fix with the old url hash format
             var lastCommit = localRepo.commits().stream().findFirst().orElseThrow();
-            issue.addComment(CommitFormatters.toTextBrief(repo, lastCommit).replace(editHash.toString(), editHash.abbreviate()));
+            issue.addComment(CommitFormatters.toTextBrief(repo, lastCommit, new Branch("master")).replace(editHash.toString(), editHash.abbreviate()));
             TestBotRunner.runPeriodicItems(notifyBot);
 
             // Verify that the planted comment is still the only one
@@ -2157,7 +2202,7 @@ public class IssueNotifierTests {
             TestBotRunner.runPeriodicItems(notifyBot);
 
             // Save the state
-            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history");
+            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
 
             // Create an issue and commit a fix
             var issue = issueProject.createIssue("This is an issue", List.of("Indeed"), Map.of("issuetype", JSON.of("Enhancement")));
@@ -2179,7 +2224,7 @@ public class IssueNotifierTests {
             assertEquals(1, links.size());
             var link = links.get(0);
             assertEquals(reviewIcon, link.iconUrl().orElseThrow());
-            assertEquals("Review", link.title().orElseThrow());
+            assertEquals("Review(master)", link.title().orElseThrow());
             assertEquals(pr.webUrl(), link.uri().orElseThrow());
 
             // Wipe the history
@@ -2190,6 +2235,406 @@ public class IssueNotifierTests {
             // There should be no new links
             var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
             assertEquals(1, updatedIssue.links().size());
+        }
+    }
+
+    @Test
+    void testAvoidForwardports(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType(), Path.of("appendable.txt"), Set.of(), null);
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var storageFolder = tempFolder.path().resolve("storage");
+            var issueProject = credentials.getIssueProject();
+            var jbsNotifierConfig = JSON.object().put("fixversions", JSON.object().put(".*aster", "22")).put("avoidforwardports", true);
+            var notifyBot = testBotBuilder(repo, issueProject, storageFolder, jbsNotifierConfig).create("notify", JSON.object());
+
+            // Initialize history
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Create an issue and commit a fix
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Enhancement"),
+                            SUBCOMPONENT, JSON.of("java.io"),
+                            RESOLVED_IN_BUILD, JSON.of("b07")
+                    ));
+            issue.setProperty("fixVersions", JSON.array().add("21"));
+            issue.setProperty("priority", JSON.of("1"));
+            issue.addLabel("test");
+            issue.addLabel("temporary");
+
+            var authorEmailAddress = issueProject.issueTracker().currentUser().username() + "@openjdk.org";
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue", "Duke", authorEmailAddress);
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The fixVersion should have been set to 22
+            var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
+            assertEquals(Set.of("22"), fixVersions(updatedIssue));
+            assertEquals(RESOLVED, updatedIssue.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), updatedIssue.assignees());
+
+            // There should be a link
+            var links = updatedIssue.links();
+            assertEquals(1, links.size());
+            var link = links.get(0);
+            var backport = link.issue().orElseThrow();
+
+            // The backport issue should have the issue's fixVersions
+            assertEquals(Set.of("21"), fixVersions(backport));
+            assertEquals(OPEN, backport.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), backport.assignees());
+
+            // Custom properties should also propagate
+            assertEquals("1", backport.properties().get("priority").asString());
+            assertEquals("java.io", backport.properties().get(SUBCOMPONENT).asString());
+            assertFalse(backport.properties().containsKey(RESOLVED_IN_BUILD));
+
+            // Labels should not
+            assertEquals(0, backport.labelNames().size());
+        }
+    }
+
+    @Test
+    void testAvoidForwardportsShouldCreateBackport(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType(), Path.of("appendable.txt"), Set.of(), null);
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var storageFolder = tempFolder.path().resolve("storage");
+            var issueProject = credentials.getIssueProject();
+            var jbsNotifierConfig = JSON.object().put("fixversions", JSON.object().put(".*aster", "21")).put("avoidforwardports", true);
+            var notifyBot = testBotBuilder(repo, issueProject, storageFolder, jbsNotifierConfig).create("notify", JSON.object());
+
+            // Initialize history
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Create an issue and commit a fix
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Enhancement"),
+                            SUBCOMPONENT, JSON.of("java.io"),
+                            RESOLVED_IN_BUILD, JSON.of("b07")
+                    ));
+            issue.setProperty("fixVersions", JSON.array().add("22"));
+            issue.setProperty("priority", JSON.of("1"));
+            issue.addLabel("test");
+            issue.addLabel("temporary");
+
+            var authorEmailAddress = issueProject.issueTracker().currentUser().username() + "@openjdk.org";
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue", "Duke", authorEmailAddress);
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The fixVersion should not have been updated
+            var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
+            assertEquals(Set.of("22"), fixVersions(updatedIssue));
+            assertEquals(OPEN, updatedIssue.state());
+            assertEquals(List.of(), updatedIssue.assignees());
+
+            // There should be a link
+            var links = updatedIssue.links();
+            assertEquals(1, links.size());
+            var link = links.get(0);
+            var backport = link.issue().orElseThrow();
+
+            // The backport issue should have the repository's fixVersions
+            assertEquals(Set.of("21"), fixVersions(backport));
+            assertEquals(RESOLVED, backport.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), backport.assignees());
+
+            // Custom properties should also propagate
+            assertEquals("1", backport.properties().get("priority").asString());
+            assertEquals("java.io", backport.properties().get(SUBCOMPONENT).asString());
+            assertFalse(backport.properties().containsKey(RESOLVED_IN_BUILD));
+
+            // Labels should not
+            assertEquals(0, backport.labelNames().size());
+        }
+    }
+
+    @Test
+    void testAvoidForwardportsShouldUseExistingForwardport(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType(), Path.of("appendable.txt"), Set.of(), null);
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var storageFolder = tempFolder.path().resolve("storage");
+            var issueProject = credentials.getIssueProject();
+            var jbsNotifierConfig = JSON.object().put("fixversions", JSON.object().put(".*aster", "22")).put("avoidforwardports", true);
+            var notifyBot = testBotBuilder(repo, issueProject, storageFolder, jbsNotifierConfig).create("notify", JSON.object());
+
+            // Initialize history
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Create an issue
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Enhancement"),
+                            SUBCOMPONENT, JSON.of("java.io"),
+                            RESOLVED_IN_BUILD, JSON.of("b07")
+                    ));
+            issue.setProperty("fixVersions", JSON.array().add("21"));
+            issue.setProperty("priority", JSON.of("1"));
+            issue.addLabel("test");
+            issue.addLabel("temporary");
+
+            // Create an explicit "forwardport"
+            var forwardPort = issueProject.createIssue("This is a forwardport", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Backport")));
+            forwardPort.setProperty("fixVersions", JSON.array().add("22"));
+
+            issue.addLink(Link.create(forwardPort, "backported by").build());
+            forwardPort.addLink(Link.create(issue, "backport of").build());
+
+            // Commit a fix for the issue
+            var authorEmailAddress = issueProject.issueTracker().currentUser().username() + "@openjdk.org";
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue", "Duke", authorEmailAddress);
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The fixVersion should not have been updated
+            var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
+            assertEquals(Set.of("21"), fixVersions(updatedIssue));
+            assertEquals(OPEN, updatedIssue.state());
+            assertEquals(List.of(), updatedIssue.assignees());
+
+            // There should still be just a single link
+            var links = updatedIssue.links();
+            assertEquals(1, links.size());
+            var link = links.get(0);
+            var backport = link.issue().orElseThrow();
+
+            // The forwardport issue should have the repository's fixVersions
+            assertEquals(Set.of("22"), fixVersions(backport));
+            assertEquals(RESOLVED, backport.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), backport.assignees());
+
+            // No properties should have propagated
+            assertFalse(backport.properties().containsKey(SUBCOMPONENT));
+            assertFalse(backport.properties().containsKey(RESOLVED_IN_BUILD));
+
+            // Not Labels should have propagated
+            assertEquals(0, backport.labelNames().size());
+        }
+    }
+
+    @Test
+    void testAvoidForwardportsShouldUseExistingBackport(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType(), Path.of("appendable.txt"), Set.of(), null);
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var storageFolder = tempFolder.path().resolve("storage");
+            var issueProject = credentials.getIssueProject();
+            var jbsNotifierConfig = JSON.object().put("fixversions", JSON.object().put(".*aster", "21")).put("avoidforwardports", true);
+            var notifyBot = testBotBuilder(repo, issueProject, storageFolder, jbsNotifierConfig).create("notify", JSON.object());
+
+            // Initialize history
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Create an issue
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Enhancement"),
+                            SUBCOMPONENT, JSON.of("java.io"),
+                            RESOLVED_IN_BUILD, JSON.of("b07")
+                    ));
+            issue.setProperty("fixVersions", JSON.array().add("22"));
+            issue.setProperty("priority", JSON.of("1"));
+            issue.addLabel("test");
+            issue.addLabel("temporary");
+
+            // Create an explicit backport
+            var backport = issueProject.createIssue("This is a backport", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Backport")));
+            backport.setProperty("fixVersions", JSON.array().add("21"));
+
+            issue.addLink(Link.create(backport, "backported by").build());
+            backport.addLink(Link.create(issue, "backport of").build());
+
+            // Commit a fix for the issue
+            var authorEmailAddress = issueProject.issueTracker().currentUser().username() + "@openjdk.org";
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue", "Duke", authorEmailAddress);
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The fixVersion should not have been updated
+            var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
+            assertEquals(Set.of("22"), fixVersions(updatedIssue));
+            assertEquals(OPEN, updatedIssue.state());
+            assertEquals(List.of(), updatedIssue.assignees());
+
+            // There should still be just a single link
+            var links = updatedIssue.links();
+            assertEquals(1, links.size());
+            var link = links.get(0);
+            var updatedBackport = link.issue().orElseThrow();
+
+            // The backport issue should have the repository's fixVersions
+            assertEquals(Set.of("21"), fixVersions(updatedBackport));
+            assertEquals(RESOLVED, updatedBackport.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), updatedBackport.assignees());
+
+            // No properties should have propagated
+            assertFalse(updatedBackport.properties().containsKey(SUBCOMPONENT));
+            assertFalse(updatedBackport.properties().containsKey(RESOLVED_IN_BUILD));
+
+            // Not Labels should have propagated
+            assertEquals(0, updatedBackport.labelNames().size());
+        }
+    }
+
+    @Test
+    void testAvoidForwardportsOnResolvedIssue(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType(), Path.of("appendable.txt"), Set.of(), null);
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var storageFolder = tempFolder.path().resolve("storage");
+            var issueProject = credentials.getIssueProject();
+            var jbsNotifierConfig = JSON.object().put("fixversions", JSON.object().put(".*aster", "22")).put("avoidforwardports", true);
+            var notifyBot = testBotBuilder(repo, issueProject, storageFolder, jbsNotifierConfig).create("notify", JSON.object());
+
+            // Initialize history
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Create an issue and commit a fix
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"),
+                    Map.of("issuetype", JSON.of("Enhancement"),
+                            SUBCOMPONENT, JSON.of("java.io"),
+                            RESOLVED_IN_BUILD, JSON.of("b07")
+                    ));
+            issue.setProperty("fixVersions", JSON.array().add("21"));
+            issue.setProperty("priority", JSON.of("1"));
+            issue.addLabel("test");
+            issue.addLabel("temporary");
+            issue.setState(RESOLVED);
+            issue.setProperty("resolution", JSON.object().put("name", JSON.of("Delivered")));
+            issue.setAssignees(List.of(issueProject.issueTracker().currentUser()));
+
+            var authorEmailAddress = issueProject.issueTracker().currentUser().username() + "@openjdk.org";
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue", "Duke", authorEmailAddress);
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The fixVersion of the main issue should still be 21
+            var updatedIssue = issueProject.issue(issue.id()).orElseThrow();
+            assertEquals(Set.of("21"), fixVersions(updatedIssue));
+            assertEquals(RESOLVED, updatedIssue.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), updatedIssue.assignees());
+            // The resolution of the issue should still be "Delivered"
+            assertEquals("Delivered", issue.properties().get("resolution").get("name").asString());
+
+            // There should be a link
+            var links = updatedIssue.links();
+            assertEquals(1, links.size());
+            var link = links.get(0);
+            var backport = link.issue().orElseThrow();
+
+            // The backport issue should target to release 22
+            assertEquals(Set.of("22"), fixVersions(backport));
+            assertEquals(RESOLVED, backport.state());
+            assertEquals(List.of(issueProject.issueTracker().currentUser()), backport.assignees());
+
+            // Custom properties should also propagate
+            assertEquals("1", backport.properties().get("priority").asString());
+            assertEquals("java.io", backport.properties().get(SUBCOMPONENT).asString());
+            assertFalse(backport.properties().containsKey(RESOLVED_IN_BUILD));
+
+            // Labels should not
+            assertEquals(0, backport.labelNames().size());
+        }
+    }
+
+    @Test
+    void testTargetBranchUpdate(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var repo = credentials.getHostedRepository();
+            var repoFolder = tempFolder.path().resolve("repo");
+            var localRepo = CheckableRepository.init(repoFolder, repo.repositoryType());
+            credentials.commitLock(localRepo);
+            localRepo.pushAll(repo.authenticatedUrl());
+
+            var tagStorage = createTagStorage(repo);
+            var branchStorage = createBranchStorage(repo);
+            var prStateStorage = createPullRequestStateStorage(repo);
+            var storageFolder = tempFolder.path().resolve("storage");
+
+            var issueProject = credentials.getIssueProject();
+            var reviewIcon = URI.create("http://www.example.com/review.png");
+            var notifyBot = NotifyBot.newBuilder()
+                    .repository(repo)
+                    .storagePath(storageFolder)
+                    .branches(Pattern.compile("master"))
+                    .tagStorageBuilder(tagStorage)
+                    .branchStorageBuilder(branchStorage)
+                    .prStateStorageBuilder(prStateStorage)
+                    .integratorId(repo.forge().currentUser().id())
+                    .build();
+            var updater = IssueNotifier.newBuilder()
+                    .issueProject(issueProject)
+                    .reviewLink(true)
+                    .reviewIcon(reviewIcon)
+                    .build();
+            // Register a RepositoryListener to make history initialize on the first run
+            notifyBot.registerRepositoryListener(new NullRepositoryListener());
+            updater.attachTo(notifyBot);
+
+            // Initialize history
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // Save the state
+            var historyState = localRepo.fetch(repo.authenticatedUrl(), "history").orElseThrow();
+
+            // Create an issue and commit a fix
+            var issue = issueProject.createIssue("This is an issue", List.of("Indeed"), Map.of("issuetype", JSON.of("Enhancement")));
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "Another line", issue.id() + ": Fix that issue");
+            localRepo.push(editHash, repo.authenticatedUrl(), "master");
+            var pr = credentials.createPullRequest(repo, "master", "master", issue.id() + ": Fix that issue");
+            pr.addLabel("rfr");
+            pr.setBody("\n\n### Issue\n * [" + issue.id() + "](http://www.test.test/): The issue");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // There should be a review link
+            var links = issue.links();
+            assertEquals(1, links.size());
+            var link = links.get(0);
+            assertEquals(reviewIcon, link.iconUrl().orElseThrow());
+            assertEquals("Review(master)", link.title().orElseThrow());
+            assertEquals(pr.webUrl(), link.uri().orElseThrow());
+            assertTrue(issue.comments().getLast().body().contains("Branch: master"));
+
+            // Retarget the pr
+            pr.setTargetRef("jdk23");
+            TestBotRunner.runPeriodicItems(notifyBot);
+
+            // The review link should be updated
+            links = issue.links();
+            assertEquals(1, links.size());
+            link = links.get(0);
+            assertEquals(reviewIcon, link.iconUrl().orElseThrow());
+            assertEquals("Review(jdk23)", link.title().orElseThrow());
+            assertEquals(pr.webUrl(), link.uri().orElseThrow());
+            assertTrue(issue.comments().getLast().body().contains("Branch: jdk23"));
         }
     }
 }

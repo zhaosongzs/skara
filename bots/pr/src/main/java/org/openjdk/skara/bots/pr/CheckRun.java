@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,11 +32,13 @@ import org.openjdk.skara.issuetracker.*;
 import org.openjdk.skara.jbs.Backports;
 import org.openjdk.skara.jbs.JdkVersion;
 import org.openjdk.skara.jcheck.JCheckConfiguration;
+import org.openjdk.skara.jcheck.TooFewReviewersIssue;
 import org.openjdk.skara.vcs.*;
 import org.openjdk.skara.vcs.openjdk.Issue;
 
 import java.io.*;
 import java.nio.file.Path;
+import java.text.Normalizer;
 import java.time.*;
 import java.util.*;
 import java.util.logging.Logger;
@@ -56,31 +58,43 @@ class CheckRun {
     private final List<Review> activeReviews;
     private final Set<String> labels;
     private final CensusInstance censusInstance;
-    private final boolean ignoreStaleReviews;
+    private final boolean useStaleReviews;
     private final Set<String> integrators;
 
     private final Hash baseHash;
     private final CheckablePullRequest checkablePullRequest;
 
     private static final Logger log = Logger.getLogger("org.openjdk.skara.bots.pr");
-    private static final String MERGE_READY_MARKER = "<!-- PullRequestBot merge is ready comment -->";
+    protected static final String MERGE_READY_MARKER = "<!-- PullRequestBot merge is ready comment -->";
+    protected static final String PLACEHOLDER_MARKER = "<!-- PullRequestBot placeholder -->";
     private static final String OUTDATED_HELP_MARKER = "<!-- PullRequestBot outdated help comment -->";
     private static final String SOURCE_BRANCH_WARNING_MARKER = "<!-- PullRequestBot source branch warning comment -->";
     private static final String MERGE_COMMIT_WARNING_MARKER = "<!-- PullRequestBot merge commit warning comment -->";
     private static final String EMPTY_PR_BODY_MARKER = "<!--\nReplace this text with a description of your pull request (also remove the surrounding HTML comment markers).\n" +
             "If in doubt, feel free to delete everything in this edit box first, the bot will restore the progress section as needed.\n-->";
     private static final String FULL_NAME_WARNING_MARKER = "<!-- PullRequestBot full name warning comment -->";
+    private static final String DIFF_TOO_LARGE_WARNING_MARKER = "<!-- PullRequestBot diff too large warning comment -->";
+    private static final String APPROVAL_NEEDED_MARKER = "<!-- PullRequestBot approval needed comment -->";
+    private static final String BACKPORT_CSR_MARKER = "<!-- PullRequestBot backport csr comment -->";
     private static final Set<String> PRIMARY_TYPES = Set.of("Bug", "New Feature", "Enhancement", "Task", "Sub-task");
+    protected static final String CSR_PROCESS_LINK = "https://wiki.openjdk.org/display/csr/Main";
+    private static final Path JCHECK_CONF_PATH = Path.of(".jcheck", "conf");
+    private static final int MESSAGE_LIMIT = 50;
     private final Set<String> newLabels;
     private final boolean reviewCleanBackport;
-    private final boolean reviewMerge;
+    private final Approval approval;
+    private final boolean reviewersCommandIssued;
+    private final ReviewCoverage reviewCoverage;
 
     private Duration expiresIn;
+    // Only set if approval is configured for the repo
+    private String realTargetRef;
+    private boolean missingApprovalRequest = false;
 
     private CheckRun(CheckWorkItem workItem, PullRequest pr, Repository localRepo, List<Comment> comments,
                      List<Review> allReviews, List<Review> activeReviews, Set<String> labels,
-                     CensusInstance censusInstance, boolean ignoreStaleReviews, Set<String> integrators, boolean reviewCleanBackport,
-                     boolean reviewMerge) throws IOException {
+                     CensusInstance censusInstance, boolean useStaleReviews, Set<String> integrators, boolean reviewCleanBackport,
+                     MergePullRequestReviewConfiguration reviewMerge, Approval approval) throws IOException {
         this.workItem = workItem;
         this.pr = pr;
         this.localRepo = localRepo;
@@ -90,23 +104,34 @@ class CheckRun {
         this.labels = new HashSet<>(labels);
         this.newLabels = new HashSet<>(labels);
         this.censusInstance = censusInstance;
-        this.ignoreStaleReviews = ignoreStaleReviews;
+        this.useStaleReviews = useStaleReviews;
         this.integrators = integrators;
         this.reviewCleanBackport = reviewCleanBackport;
-        this.reviewMerge = reviewMerge;
+        this.approval = approval;
+        this.reviewersCommandIssued = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments).isPresent();
 
+        // If reviewers command is issued, enable reviewers check for merge pull requests
+        if (reviewersCommandIssued) {
+            reviewMerge = MergePullRequestReviewConfiguration.ALWAYS;
+        }
+
+        reviewCoverage = new ReviewCoverage(workItem.bot.useStaleReviews(), workItem.bot.acceptSimpleMerges(), localRepo, pr);
         baseHash = PullRequestUtils.baseHash(pr, localRepo);
-        checkablePullRequest = new CheckablePullRequest(pr, localRepo, ignoreStaleReviews,
-                                                        workItem.bot.confOverrideRepository().orElse(null),
-                                                        workItem.bot.confOverrideName(),
-                                                        workItem.bot.confOverrideRef());
+        checkablePullRequest = new CheckablePullRequest(pr, localRepo, useStaleReviews,
+                workItem.bot.confOverrideRepository().orElse(null),
+                workItem.bot.confOverrideName(),
+                workItem.bot.confOverrideRef(),
+                comments,
+                reviewMerge,
+                reviewCoverage);
     }
 
     static Optional<Instant> execute(CheckWorkItem workItem, PullRequest pr, Repository localRepo, List<Comment> comments,
-                        List<Review> allReviews, List<Review> activeReviews, Set<String> labels, CensusInstance censusInstance,
-                        boolean ignoreStaleReviews, Set<String> integrators, boolean reviewCleanBackport, boolean reviewMerge) throws IOException {
+                                     List<Review> allReviews, List<Review> activeReviews, Set<String> labels, CensusInstance censusInstance,
+                                     boolean useStaleReviews, Set<String> integrators, boolean reviewCleanBackport, MergePullRequestReviewConfiguration reviewMerge,
+                                     Approval approval) throws IOException {
         var run = new CheckRun(workItem, pr, localRepo, comments, allReviews, activeReviews, labels, censusInstance,
-                ignoreStaleReviews, integrators, reviewCleanBackport, reviewMerge);
+                useStaleReviews, integrators, reviewCleanBackport, reviewMerge, approval);
         run.checkStatus();
         if (run.expiresIn != null) {
             return Optional.of(Instant.now().plus(run.expiresIn));
@@ -132,7 +157,7 @@ class CheckRun {
         if (issue.isPresent()) {
             var issues = new ArrayList<Issue>();
             issues.add(issue.get());
-            issues.addAll(SolvesTracker.currentSolved(pr.repository().forge().currentUser(), comments));
+            issues.addAll(SolvesTracker.currentSolved(pr.repository().forge().currentUser(), comments, pr.title()));
             var map = new LinkedHashMap<Issue, Optional<IssueTrackerIssue>>();
             if (issueProject() != null) {
                 issues.forEach(i -> {
@@ -156,16 +181,14 @@ class CheckRun {
     /**
      * Constructs a map from main issue ID to CSR issue.
      */
-    private Map<String, IssueTrackerIssue> issueToCsrMap(Map<Issue, Optional<IssueTrackerIssue>> regularIssuesMap, JdkVersion version) {
+    private Map<String, IssueTrackerIssue> issueToCsrMap(Map<String, List<IssueTrackerIssue>> issueToAllCsrsMap, JdkVersion version) {
         var csrIssueMap = new HashMap<String, IssueTrackerIssue>();
         if (version == null) {
             return Map.of();
         }
-        for (var issue : regularIssuesMap.values()) {
-            if (issue.isPresent()) {
-                var csrIssue = Backports.findCsr(issue.get(), version);
-                csrIssue.ifPresent(csr -> csrIssueMap.put(issue.get().id(), csr));
-            }
+        for (var entry : issueToAllCsrsMap.entrySet()) {
+            var csrList = entry.getValue();
+            Backports.findClosestIssue(csrList, version).ifPresent(csr -> csrIssueMap.put(entry.getKey(), csr));
         }
         return csrIssueMap;
     }
@@ -176,7 +199,7 @@ class CheckRun {
     private Optional<IssueTrackerIssue> jepIssue() {
         if (issueProject() != null) {
             var comment = findJepComment();
-            return comment.flatMap(c -> workItem.issueTrackerIssue(c.group(2)));
+            return comment.flatMap(c -> workItem.issueTrackerIssue(new Issue(c.group(2), "").shortId()));
         }
         return Optional.empty();
     }
@@ -217,7 +240,8 @@ class CheckRun {
     private List<String> botSpecificChecks(boolean iscleanBackport) {
         var ret = new ArrayList<String>();
 
-        if (bodyWithoutStatus().isBlank() && !iscleanBackport) {
+        var bodyWithoutStatus = bodyWithoutStatus();
+        if ((bodyWithoutStatus.isBlank() || bodyWithoutStatus.equals(EMPTY_PR_BODY_MARKER)) && !iscleanBackport) {
             ret.add(MSG_EMPTY_BODY);
         }
 
@@ -243,7 +267,7 @@ class CheckRun {
         return ret;
     }
 
-    private boolean isWithdrawnCSR(IssueTrackerIssue csr) {
+    public static boolean isWithdrawnCSR(IssueTrackerIssue csr) {
         if (csr.isClosed()) {
             var resolution = csr.resolution();
             if (resolution.isPresent()) {
@@ -261,16 +285,31 @@ class CheckRun {
     }
 
     // Additional bot-specific progresses that are not handled by JCheck
-    private Map<String, Boolean> botSpecificProgresses(List<IssueTrackerIssue> csrIssueTrackerIssues,
-            IssueTrackerIssue jepIssue, JdkVersion version) {
+    private Map<String, Boolean> botSpecificProgresses(Map<Issue, Optional<IssueTrackerIssue>> regularIssuesMap,
+                                                       List<IssueTrackerIssue> csrIssueTrackerIssues,
+                                                       IssueTrackerIssue jepIssue, JdkVersion version) {
         var ret = new HashMap<String, Boolean>();
+
+        if (approvalNeeded()) {
+            for (var issueOpt : regularIssuesMap.values()) {
+                if (issueOpt.isPresent()) {
+                    var issue = issueOpt.get();
+                    var labelNames = issue.labelNames();
+                    if (labelNames.contains(approval.approvedLabel(pr.targetRef()))) {
+                        ret.put("[" + issue.id() + "](" + issue.webUrl() + ") needs " + approval.approvalTerm(), true);
+                    } else {
+                        ret.put("[" + issue.id() + "](" + issue.webUrl() + ") needs " + approval.approvalTerm(), false);
+                    }
+                }
+            }
+        }
 
         var csrIssues = csrIssueTrackerIssues.stream()
                 .filter(issue -> issue.properties().containsKey("issuetype"))
                 .filter(issue -> issue.properties().get("issuetype").asString().equals("CSR"))
                 .filter(issue -> !isWithdrawnCSR(issue))
                 .toList();
-        if (csrIssues.isEmpty() && pr.labelNames().contains("csr")) {
+        if (csrIssues.isEmpty() && newLabels.contains("csr")) {
             ret.put("Change requires a CSR request matching fixVersion " + (version != null ? version.raw() : "(No fixVersion in .jcheck/conf)")
                     + " to be approved (needs to be created)", false);
         }
@@ -301,10 +340,10 @@ class CheckRun {
             ret.put("Change requires a JEP request to be targeted", jepHasTargeted);
             if (jepHasTargeted && newLabels.contains("jep")) {
                 log.info("JEP issue " + jepIssue.id() + " found in state " + jepIssueStatus + ", removing JEP label from " + describe(pr));
-                newLabels.remove("jep");
+                newLabels.remove(JEP_LABEL);
             } else if (!jepHasTargeted && !newLabels.contains("jep")) {
                 log.info("JEP issue " + jepIssue.id() + " found in state " + jepIssueStatus + ", adding JEP label to " + describe(pr));
-                newLabels.add("jep");
+                newLabels.add(JEP_LABEL);
             }
         }
         return ret;
@@ -374,12 +413,23 @@ class CheckRun {
     private void updateCheckBuilder(CheckBuilder checkBuilder, PullRequestCheckIssueVisitor visitor, List<String> additionalErrors) {
         if (visitor.isReadyForReview() && additionalErrors.isEmpty()) {
             checkBuilder.complete(true);
+            // It means some jchecks failed as warnings
+            if (!visitor.getAnnotations().isEmpty()) {
+                checkBuilder.title("Optional");
+                checkBuilder.summary("These warnings will not block integration.");
+                for (var annotation : visitor.getAnnotations()) {
+                    checkBuilder.annotation(annotation);
+                }
+            }
         } else {
             checkBuilder.title("Required");
-            var summary = Stream.concat(visitor.messages().stream(), additionalErrors.stream())
-                                .sorted()
-                                .map(m -> "- " + m)
-                                .collect(Collectors.joining("\n"));
+            var summary = Stream.concat(visitor.errorFailedChecksMessages().stream().limit(MESSAGE_LIMIT), additionalErrors.stream().limit(MESSAGE_LIMIT))
+                    .sorted()
+                    .map(m -> "- " + m)
+                    .collect(Collectors.joining("\n"));
+            if (visitor.errorFailedChecksMessages().size() > MESSAGE_LIMIT || additionalErrors.size() > MESSAGE_LIMIT) {
+                summary = summary + "\nThere are more errors that are not displayed due to the size limit.";
+            }
             checkBuilder.summary(summary);
             for (var annotation : visitor.getAnnotations()) {
                 checkBuilder.annotation(annotation);
@@ -388,7 +438,12 @@ class CheckRun {
         }
     }
 
-    private boolean updateReadyForReview(PullRequestCheckIssueVisitor visitor, List<String> additionalErrors) {
+    private boolean updateReadyForReview(PullRequestCheckIssueVisitor visitor, List<String> additionalErrors, Map<Issue, Optional<IssueTrackerIssue>> regularIssuesMap) {
+        // All the issues must be accessible
+        if (issueProject() != null && regularIssuesMap.values().stream().anyMatch(Optional::isEmpty)) {
+            return false;
+        }
+
         // Additional errors are not allowed
         if (!additionalErrors.isEmpty()) {
             newLabels.remove("rfr");
@@ -414,6 +469,11 @@ class CheckRun {
     private boolean updateClean(Commit commit) {
         var backportDiff = commit.parentDiffs().get(0);
         var prDiff = pr.diff();
+        if (!backportDiff.complete() || !prDiff.complete()) {
+            // Add diff too large warning comment
+            addDiffTooLargeWarning();
+            return false;
+        }
         var isClean = DiffComparator.areFuzzyEqual(backportDiff, prDiff);
         var hasCleanLabel = labels.contains("clean");
         if (isClean && !hasCleanLabel) {
@@ -422,11 +482,10 @@ class CheckRun {
         }
 
         var botUser = pr.repository().forge().currentUser();
-        var isCleanLabelManuallyAdded =
-            pr.comments()
-              .stream()
-              .filter(c -> c.author().equals(botUser))
-              .anyMatch(c -> c.body().contains("This backport pull request is now marked as clean"));
+        var isCleanLabelManuallyAdded = comments
+                .stream()
+                .filter(c -> c.author().equals(botUser))
+                .anyMatch(c -> c.body().contains("This backport pull request is now marked as clean"));
 
         if (!isCleanLabelManuallyAdded && !isClean && hasCleanLabel) {
             log.info("Removing label clean");
@@ -450,7 +509,15 @@ class CheckRun {
         if (hash == null) {
             return Optional.empty();
         }
-        var commit = pr.repository().forge().search(hash, true);
+        var repoName = checkablePullRequest.findOriginalBackportRepo();
+        if (repoName == null) {
+            repoName = pr.repository().forge().search(hash).orElseThrow();
+        }
+        var repo = pr.repository().forge().repository(repoName);
+        if (repo.isEmpty()) {
+            throw new IllegalStateException("Backport comment for PR " + pr.id() + " contains bad repo name: " + repoName);
+        }
+        var commit = repo.get().commit(hash, true);
         if (commit.isEmpty()) {
             throw new IllegalStateException("Backport comment for PR " + pr.id() + " contains bad hash: " + hash.hex());
         }
@@ -537,42 +604,59 @@ class CheckRun {
     }
 
     private String warningListToText(List<String> additionalErrors) {
-        return additionalErrors.stream()
-                               .sorted()
-                               .map(err -> "&nbsp;⚠️ " + err)
-                               .collect(Collectors.joining("\n"));
+        var text = additionalErrors.stream()
+                .sorted()
+                .limit(MESSAGE_LIMIT)
+                .map(err -> "&nbsp;⚠️ " + err)
+                .collect(Collectors.joining("\n"));
+        if (additionalErrors.size() > MESSAGE_LIMIT) {
+            text = text + "\n...";
+        }
+        return text;
     }
 
-    private Optional<String> getReviewersList() {
-        var reviewers = activeReviews.stream()
-                               .filter(review -> review.verdict() == Review.Verdict.APPROVED)
-                               .map(review -> {
-                                   var entry = " * " + formatReviewer(review.reviewer());
-                                   if (!review.targetRef().equals(pr.targetRef())) {
-                                       entry += " 🔄 Re-review required (review was made when pull request targeted the [" + review.targetRef()
-                                               + "](" + pr.repository().webUrl(new Branch(review.targetRef())) + ") branch)";
-                                   } else {
-                                       var hash = review.hash();
-                                       if (hash.isPresent()) {
-                                           if (!hash.get().equals(pr.headHash())) {
-                                               if (ignoreStaleReviews) {
-                                                   entry += " 🔄 Re-review required (review applies to [" + hash.get().abbreviate()
-                                                           + "](" + pr.filesUrl(hash.get()) + "))";
-                                               } else {
-                                                   entry += " ⚠️ Review applies to [" + hash.get().abbreviate()
-                                                           + "](" + pr.filesUrl(hash.get()) + ")";
-                                               }
-                                           }
-                                       } else {
-                                           entry += " 🔄 Re-review required (review applies to a commit that is no longer present)";
-                                       }
-                                   }
-                                   return entry;
-                               })
-                               .collect(Collectors.joining("\n"));
+    private Optional<String> getReviewersList(List<Review> reviews, boolean tooFewReviewers) {
+        var reviewers = reviews.stream()
+                .filter(review -> review.verdict() == Review.Verdict.APPROVED)
+                .map(review -> {
+                    var entry = " * " + formatReviewer(review.reviewer());
+                    if (!review.targetRef().equals(pr.targetRef())) {
+                        if (useStaleReviews || tooFewReviewers) {
+                            entry += " 🔄 Re-review required (review was made when pull request targeted the [" + review.targetRef()
+                                    + "](" + pr.repository().webUrl(new Branch(review.targetRef())) + ") branch)";
+                        } else {
+                            entry += " Review was made when pull request targeted the [" + review.targetRef()
+                                    + "](" + pr.repository().webUrl(new Branch(review.targetRef())) + ") branch";
+                        }
+                    } else {
+                        var hash = review.hash();
+                        if (hash.isPresent()) {
+                            if (!hash.get().equals(pr.headHash())) {
+                                if (useStaleReviews) {
+                                    entry += " ⚠️ Review applies to [" + hash.get().abbreviate()
+                                            + "](" + pr.filesUrl(hash.get()) + ")";
+                                } else if (!reviewCoverage.covers(review) && tooFewReviewers) {
+                                    entry += " 🔄 Re-review required (review applies to [" + hash.get().abbreviate()
+                                            + "](" + pr.filesUrl(hash.get()) + "))";
+                                } else {
+                                    entry += " Review applies to [" + hash.get().abbreviate()
+                                            + "](" + pr.filesUrl(hash.get()) + ")";
+                                }
+                            }
+                        } else {
+                            if (useStaleReviews || tooFewReviewers) {
+                                entry += " 🔄 Re-review required (review applies to a commit that is no longer present)";
+                            } else {
+                                entry += " Review applies to a commit that is no longer present";
+                            }
+                        }
+                    }
+                    return entry;
+                })
+                .collect(Collectors.joining("\n"));
 
         // Check for manually added reviewers
-        if (!ignoreStaleReviews) {
+        if (useStaleReviews) {
             var namespace = censusInstance.namespace();
             var allReviewers = CheckablePullRequest.reviewerNames(activeReviews, namespace);
             var additionalEntries = new ArrayList<String>();
@@ -612,7 +696,7 @@ class CheckRun {
         }
     }
 
-    private boolean relaxedEquals(String s1, String s2) {
+    static boolean relaxedEquals(String s1, String s2) {
         return s1.trim()
                  .replaceAll("\\s+", " ")
                  .equalsIgnoreCase(s2.trim()
@@ -621,15 +705,15 @@ class CheckRun {
 
     private String getStatusMessage(PullRequestCheckIssueVisitor visitor,
             List<String> additionalErrors, Map<String, Boolean> additionalProgresses,
-            List<String> integrationBlockers, boolean reviewNeeded,
+            List<String> integrationBlockers, List<String> warnings, boolean reviewNeeded,
             Map<Issue, Optional<IssueTrackerIssue>> regularIssuesMap,
-            IssueTrackerIssue jepIssue, Collection<IssueTrackerIssue> csrIssues) {
+            IssueTrackerIssue jepIssue, Collection<IssueTrackerIssue> csrIssues, JdkVersion version, boolean tooFewReviewers) {
         var progressBody = new StringBuilder();
         progressBody.append("---------\n");
         progressBody.append("### Progress\n");
         progressBody.append(getChecksList(visitor, reviewNeeded, additionalProgresses));
 
-        var allAdditionalErrors = Stream.concat(visitor.hiddenMessages().stream(), additionalErrors.stream())
+        var allAdditionalErrors = Stream.concat(visitor.hiddenErrorMessages().stream(), additionalErrors.stream())
                                         .sorted()
                                         .collect(Collectors.toList());
         if (!allAdditionalErrors.isEmpty()) {
@@ -650,6 +734,16 @@ class CheckRun {
             progressBody.append(warningListToText(integrationBlockers));
         }
 
+        var allWarnings = Stream.concat(visitor.hiddenWarningMessages().stream(), warnings.stream()).toList();
+        if (!allWarnings.isEmpty()) {
+            progressBody.append("\n\n### Warning");
+            if (allWarnings.size() > 1) {
+                progressBody.append("s");
+            }
+            progressBody.append("\n");
+            progressBody.append(warningListToText(allWarnings));
+        }
+
         // All the issues this pr related(except CSR and JEP)
         var currentIssues = new HashSet<String>();
         var issueProject = issueProject();
@@ -659,6 +753,9 @@ class CheckRun {
                 progressBody.append("s");
             }
             progressBody.append("\n");
+
+            var requestPresent = false;
+
             for (var issueEntry : regularIssuesMap.entrySet()) {
                 var issue = issueEntry.getKey();
                 progressBody.append(" * ");
@@ -677,10 +774,36 @@ class CheckRun {
                         if (issueType != null) {
                             progressBody.append(" (**").append(issueType.asString()).append("**");
                             var issuePriority = issueTrackerIssue.get().properties().get("priority");
-                            if (issuePriority == null) {
-                                progressBody.append(")");
-                            } else {
-                                progressBody.append(" - P").append(issuePriority.asString()).append(")");
+                            if (issuePriority != null) {
+                                progressBody.append(" - P").append(issuePriority.asString());
+                            }
+                            if (approvalNeeded()) {
+                                String status = "";
+                                var labels = issueTrackerIssue.get().labelNames();
+                                if (labels.contains(approval.rejectedLabel(realTargetRef))) {
+                                    status = "Rejected";
+                                } else if (labels.contains(approval.approvedLabel(realTargetRef))) {
+                                    status = "Approved";
+                                } else if (labels.contains(approval.requestedLabel(realTargetRef))) {
+                                    status = "Requested";
+                                    requestPresent = true;
+                                } else {
+                                    missingApprovalRequest = true;
+                                }
+                                if (!status.isEmpty()) {
+                                    progressBody.append(" - ").append(status);
+                                }
+                            }
+                            progressBody.append(")");
+                        }
+                        if (workItem.bot.versionMismatchWarning() && issueTrackerIssue.get().isOpen()
+                                && version != null && issueType != null && PRIMARY_TYPES.contains(issueType.asString())) {
+                            var existing = Backports.findIssue(issueTrackerIssue.get(), version);
+                            if (existing.isEmpty()) {
+                                var fixVersions = Backports.fixVersions(issueTrackerIssue.get());
+                                progressBody.append("(⚠️ The fixVersion in this issue is " + fixVersions +
+                                        " but the fixVersion in .jcheck/conf is " + version.raw() + ", " +
+                                        "a new backport will be created when this pr is integrated.)");
                             }
                         }
                         if (!relaxedEquals(issueTrackerIssue.get().title(), issue.description())) {
@@ -688,7 +811,7 @@ class CheckRun {
                             setExpiration(Duration.ofMinutes(10));
                         }
                         if (!issueTrackerIssue.get().isOpen()) {
-                            if (!pr.labelNames().contains("backport") &&
+                            if (!newLabels.contains("backport") &&
                                     (issueType == null || !List.of("CSR", "JEP").contains(issueType.asString()))) {
                                 if (issueTrackerIssue.get().isFixed()) {
                                     progressBody.append(" ⚠️ Issue is already resolved. " +
@@ -708,19 +831,28 @@ class CheckRun {
                 }
                 progressBody.append("\n");
             }
+
+            if (requestPresent) {
+                newLabels.add(APPROVAL_LABEL);
+            } else {
+                newLabels.remove(APPROVAL_LABEL);
+            }
             if (jepIssue != null) {
                 currentIssues.add(jepIssue.id());
                 progressBody.append(" * ");
                 formatIssue(progressBody, jepIssue);
                 progressBody.append(" (**JEP**)");
+                progressBody.append("\n");
             }
             for (var csrIssue : csrIssues) {
+                currentIssues.add(csrIssue.id());
                 progressBody.append(" * ");
                 formatIssue(progressBody, csrIssue);
                 progressBody.append(" (**CSR**)");
                 if (isWithdrawnCSR(csrIssue)) {
                     progressBody.append(" (Withdrawn)");
                 }
+                progressBody.append("\n");
             }
 
             // Update the issuePRMap
@@ -742,8 +874,21 @@ class CheckRun {
             }
         }
 
-        getReviewersList().ifPresent(reviewers -> {
+        // Generate Reviewers list for recognized users
+        var recognizedReviews = activeReviews.stream()
+                .filter(review -> censusInstance.contributor(review.reviewer()).isPresent())
+                .toList();
+        getReviewersList(recognizedReviews, tooFewReviewers).ifPresent(reviewers -> {
             progressBody.append("\n\n### Reviewers\n");
+            progressBody.append(reviewers);
+        });
+
+        // Generate Reviewers list for reviewers without OpenJDK IDs
+        var nonRecognizedReviews = activeReviews.stream()
+                .filter(review -> censusInstance.contributor(review.reviewer()).isEmpty())
+                .toList();
+        getReviewersList(nonRecognizedReviews, tooFewReviewers).ifPresent(reviewers -> {
+            progressBody.append("\n\n### Reviewers without OpenJDK IDs\n");
             progressBody.append(reviewers);
         });
 
@@ -759,8 +904,7 @@ class CheckRun {
 
         var webrevCommentLink = getWebrevCommentLink();
         if (webrevCommentLink.isPresent()) {
-            progressBody.append("\n\n### Webrev\n");
-            progressBody.append(webrevCommentLink.get());
+            progressBody.append(makeCollapsible("Using Webrev", webrevCommentLink.get()));
         }
         return progressBody.toString();
     }
@@ -929,10 +1073,10 @@ class CheckRun {
             message.append(pr.targetRef());
             message.append("` branch:\n\n");
             divergingCommits.stream()
-                            .limit(10)
+                            .limit(CheckablePullRequest.COMMIT_LIST_LIMIT)
                             .forEach(c -> message.append(" * ").append(c.hash().hex()).append(": ").append(c.message().get(0)).append("\n"));
-            if (divergingCommits.size() > 10) {
-                message.append(" * ... and ").append(divergingCommits.size() - 10).append(" more: ")
+            if (divergingCommits.size() > CheckablePullRequest.COMMIT_LIST_LIMIT) {
+                message.append(" * ... and ").append(divergingCommits.size() -CheckablePullRequest. COMMIT_LIST_LIMIT).append(" more: ")
                        .append(pr.repository().webUrl(baseHash.hex(), pr.targetRef())).append("\n");
             } else {
                 message.append("\n");
@@ -1012,8 +1156,11 @@ class CheckRun {
         var head = pr.repository().commit(pr.headHash()).orElseThrow(
             () -> new IllegalStateException("Cannot lookup HEAD hash for PR " + pr.id())
         );
-        if (!pr.author().fullName().equals(pr.author().username()) &&
-            !pr.author().fullName().equals(head.author().name())) {
+        // Normalize the strings before comparison to ensure unicode characters are encoded in the same way
+        var prAuthorFullName = Normalizer.normalize(pr.author().fullName(), Normalizer.Form.NFC);
+        var prAuthorUserName = Normalizer.normalize(pr.author().username(), Normalizer.Form.NFC);
+        var headAuthorName = Normalizer.normalize(head.author().name(), Normalizer.Form.NFC);
+        if (!prAuthorFullName.equals(prAuthorUserName) && !prAuthorFullName.equals(headAuthorName)) {
             var headUrl = pr.headUrl().toString();
             var message = ":warning: @" + pr.author().username() + " the full name on your profile does not match " +
                 "the author name in this pull requests' [HEAD](" + headUrl + ") commit. " +
@@ -1047,7 +1194,7 @@ class CheckRun {
                     log.info("Merge ready comment already exists, no need to update");
                 }
             }
-        } else if (existing.isPresent()) {
+        } else if (existing.isPresent() && !existing.get().body().contains(PLACEHOLDER_MARKER)) {
             var message = getMergeNoLongerReadyComment();
             if (!existing.get().body().equals(message)) {
                 log.info("Updating no longer ready comment");
@@ -1131,6 +1278,19 @@ class CheckRun {
         pr.addComment(message);
     }
 
+    private void addDiffTooLargeWarning() {
+        var existing = findComment(DIFF_TOO_LARGE_WARNING_MARKER);
+        if (existing.isPresent()) {
+            // Only add the comment once per PR
+            return;
+        }
+        var message = "⚠️  @" + pr.author().username() +
+                " This backport pull request is too large to be automatically evaluated as clean. " +
+                DIFF_TOO_LARGE_WARNING_MARKER;
+        log.info("Adding diff too large warning comment");
+        pr.addComment(message);
+    }
+
     static String getJcheckName(PullRequest pr) {
         return pr.repository().forge().name().equals("GitHub") ? "jcheck-" + pr.repository().name() + "-" + pr.id() : "jcheck";
     }
@@ -1138,8 +1298,8 @@ class CheckRun {
     private void checkStatus() {
         var checkBuilder = CheckBuilder.create(getJcheckName(pr), pr.headHash());
         var censusDomain = censusInstance.configuration().census().domain();
+        var jcheckType = "jcheck";
         Exception checkException = null;
-        String jcheckType = "jcheck";
 
         try {
             // Post check in-progress
@@ -1156,30 +1316,57 @@ class CheckRun {
                 rebasePossible = false;
             }
 
-            List<String> mergeJCheckMessage = new ArrayList<>();
-
+            var warnings = new ArrayList<String>();
+            var mergeJCheckMessageWithTargetConf = new ArrayList<String>();
+            var mergeJCheckMessageWithCommitConf = new ArrayList<String>();
+            var targetHash = checkablePullRequest.targetHash();
+            var targetJCheckConf = checkablePullRequest.parseJCheckConfiguration(targetHash);
+            var isJCheckConfUpdatedInMergePR = false;
+            var hasOverridingJCheckConf = workItem.bot.confOverrideRepository().isPresent();
             if (PullRequestUtils.isMerge(pr)) {
                 if (rebasePossible) {
                     localRepo.lookup(pr.headHash()).ifPresent(this::updateMergeClean);
                 }
 
+                var mergeBaseHash = localRepo.mergeBase(targetHash, pr.headHash());
+                var commits = localRepo.commitMetadata(mergeBaseHash, pr.headHash(), true);
+                isJCheckConfUpdatedInMergePR = isFileUpdated(JCHECK_CONF_PATH, mergeBaseHash, pr.headHash());
+
                 // JCheck all commits in "Merge PR"
                 if (workItem.bot.jcheckMerge()) {
-                    var commits = localRepo.commitMetadata(localRepo.mergeBase(
-                            PullRequestUtils.targetHash(localRepo), pr.headHash()), commitHash);
-                    var commitHashes = commits.stream()
-                            .map(CommitMetadata::hash)
-                            .collect(Collectors.toSet());
-                    commitHashes.remove(pr.headHash());
-                    for (Hash hash : commitHashes) {
-                        jcheckType = "merge jcheck in commit " + hash.hex();
-                        PullRequestCheckIssueVisitor visitor = checkablePullRequest.createVisitor(hash);
-                        checkablePullRequest.executeChecks(hash, censusInstance, visitor, List.of(), hash);
-                        mergeJCheckMessage.addAll(visitor.messages().stream()
+                    for (var commit : commits) {
+                        var hash = commit.hash();
+                        jcheckType = "merge jcheck with target conf in commit " + hash.hex();
+                        var targetVisitor = checkablePullRequest.createVisitor(targetJCheckConf);
+                        checkablePullRequest.executeChecks(hash, censusInstance, targetVisitor, targetJCheckConf);
+                        mergeJCheckMessageWithTargetConf.addAll(targetVisitor.errorFailedChecksMessages().stream()
                                 .map(StringBuilder::new)
-                                .map(e -> e.append(" (in commit ").append(hash.hex()).append(")"))
+                                .map(e -> e.append(" (in commit `").append(hash.hex()).append("` with target configuration)"))
                                 .map(StringBuilder::toString)
                                 .toList());
+                        warnings.addAll(targetVisitor.warningFailedChecksMessages().stream()
+                                .map(StringBuilder::new)
+                                .map(e -> e.append(" (in commit `").append(hash.hex()).append("` with target configuration)"))
+                                .map(StringBuilder::toString)
+                                .toList());
+
+                        if (!hasOverridingJCheckConf && isJCheckConfUpdatedInMergePR) {
+                            var commitJCheckConf = checkablePullRequest.parseJCheckConfiguration(hash);
+                            var commitVisitor = checkablePullRequest.createVisitor(commitJCheckConf);
+                            jcheckType = "merge jcheck with commit conf in commit " + hash.hex();
+                            checkablePullRequest.executeChecks(hash, censusInstance, commitVisitor, commitJCheckConf);
+                            mergeJCheckMessageWithCommitConf.addAll(commitVisitor.errorFailedChecksMessages().stream()
+                                    .map(StringBuilder::new)
+                                    .map(e -> e.append(" (in commit `").append(hash.hex()).append("` with commit configuration)"))
+                                    .map(StringBuilder::toString)
+                                    .toList());
+                            warnings.addAll(commitVisitor.warningFailedChecksMessages().stream()
+                                    .map(StringBuilder::new)
+                                    .map(e -> e.append(" (in commit `").append(hash.hex()).append("` with commit configuration)"))
+                                    .map(StringBuilder::toString)
+                                    .toList());
+                        }
+
                     }
                 }
             }
@@ -1202,8 +1389,10 @@ class CheckRun {
                 additionalErrors = List.of(e.getMessage());
                 localHash = baseHash;
             }
-            PullRequestCheckIssueVisitor visitor = checkablePullRequest.createVisitor(checkablePullRequest.targetHash());
-            boolean needUpdateAdditionalProgresses = false;
+
+            var visitor = checkablePullRequest.createVisitor(targetJCheckConf);
+            boolean tooFewReviewers = false;
+            var needUpdateAdditionalProgresses = false;
             if (localHash.equals(baseHash)) {
                 if (additionalErrors.isEmpty()) {
                     additionalErrors = List.of("This PR contains no changes");
@@ -1212,19 +1401,28 @@ class CheckRun {
                 additionalErrors = List.of("This PR only contains changes already present in the target");
             } else {
                 // Determine current status
-                jcheckType = "jcheck";
-                var additionalConfiguration = AdditionalConfiguration.get(localRepo, localHash,
-                        pr.repository().forge().currentUser(), comments, reviewMerge);
-                checkablePullRequest.executeChecks(localHash, censusInstance, visitor, additionalConfiguration, checkablePullRequest.targetHash());
-                // Don't need to run the second round if confOverride is set.
-                if (workItem.bot.confOverrideRepository().isEmpty() && isFileUpdated(".jcheck/conf", localHash)) {
-                    jcheckType = "second jcheck";
-                    PullRequestCheckIssueVisitor visitor2 = checkablePullRequest.createVisitor(pr.headHash());
-                    log.info("Run jcheck again with the updated configuration");
-                    checkablePullRequest.executeChecks(localHash, censusInstance, visitor2, additionalConfiguration, pr.headHash());
-                    secondJCheckMessage.addAll(visitor2.messages().stream()
+                jcheckType = "target jcheck";
+                var jcheckIssues = checkablePullRequest.executeChecks(localHash, censusInstance, visitor, targetJCheckConf);
+                tooFewReviewers = jcheckIssues.stream().anyMatch(TooFewReviewersIssue.class::isInstance);
+
+                // If the PR updates .jcheck/conf then Need to run JCheck again using the configuration
+                // from the resulting commit. Not needed if we are overriding the JCheck configuration since
+                // then we won't use the one in the repo anyway.
+                if (!hasOverridingJCheckConf &&
+                        (isFileUpdated(JCHECK_CONF_PATH, localRepo.mergeBase(pr.headHash(), targetHash), pr.headHash()) || isJCheckConfUpdatedInMergePR)) {
+                    jcheckType = "source jcheck";
+                    var localJCheckConf = checkablePullRequest.parseJCheckConfiguration(localHash);
+                    var localVisitor = checkablePullRequest.createVisitor(localJCheckConf);
+                    log.info("Run JCheck against localHash with configuration from localHash");
+                    checkablePullRequest.executeChecks(localHash, censusInstance, localVisitor, localJCheckConf);
+                    secondJCheckMessage.addAll(localVisitor.errorFailedChecksMessages().stream()
                             .map(StringBuilder::new)
-                            .map(e -> e.append(" (failed with the updated jcheck configuration)"))
+                            .map(e -> e.append(" (failed with updated jcheck configuration in pull request)"))
+                            .map(StringBuilder::toString)
+                            .toList());
+                    warnings.addAll(localVisitor.warningFailedChecksMessages().stream()
+                            .map(StringBuilder::new)
+                            .map(e -> e.append(" (failed with updated jcheck configuration in pull request)"))
                             .map(StringBuilder::toString)
                             .toList());
                 }
@@ -1232,7 +1430,7 @@ class CheckRun {
                 needUpdateAdditionalProgresses = true;
             }
 
-            var confFile = localRepo.lines(Path.of(".jcheck/conf"), localHash);
+            var confFile = localRepo.lines(JCHECK_CONF_PATH, localHash);
             JdkVersion version = null;
             if (confFile.isPresent()) {
                 var configuration = JCheckConfiguration.parse(confFile.get());
@@ -1245,47 +1443,47 @@ class CheckRun {
             // issues without CSR issues and JEP issues
             var regularIssuesMap = regularIssuesMap();
             var jepIssue = jepIssue().orElse(null);
-            var issueToCsrMap = issueToCsrMap(regularIssuesMap, version);
+            var issueToAllCsrsMap = issueToAllCsrsMap(regularIssuesMap);
+            var issueToCsrMap = issueToCsrMap(issueToAllCsrsMap, version);
             var csrIssues = issueToCsrMap.values().stream().toList();
-            if (needUpdateAdditionalProgresses) {
-                additionalProgresses = botSpecificProgresses(csrIssues, jepIssue, version);
-            }
 
             // Check the status of csr issues and determine whether to add or remove csr label here
             updateCSRLabel(version, issueToCsrMap);
 
+            // In a backport PR, Check if one of associated issues has a resolved CSR for a different fixVersion
+            updateBackportCSRLabel(issueToAllCsrsMap, issueToCsrMap);
+
+            if (needUpdateAdditionalProgresses) {
+                additionalProgresses = botSpecificProgresses(regularIssuesMap, csrIssues, jepIssue, version);
+            }
+
             updateCheckBuilder(checkBuilder, visitor, additionalErrors);
-            var readyForReview = updateReadyForReview(visitor, additionalErrors);
+            var readyForReview = updateReadyForReview(visitor, additionalErrors, regularIssuesMap);
 
             var integrationBlockers = botSpecificIntegrationBlockers(regularIssuesMap);
             integrationBlockers.addAll(secondJCheckMessage);
-            integrationBlockers.addAll(mergeJCheckMessage);
-
-            var reviewersCommandIssued = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments).isPresent();
+            integrationBlockers.addAll(mergeJCheckMessageWithTargetConf);
+            integrationBlockers.addAll(mergeJCheckMessageWithCommitConf);
 
             var reviewNeeded = !isCleanBackport || reviewCleanBackport || reviewersCommandIssued;
 
             // Calculate and update the status message if needed
-            var statusMessage = getStatusMessage(visitor, additionalErrors, additionalProgresses, integrationBlockers,
-                    reviewNeeded, regularIssuesMap, jepIssue, issueToCsrMap.values());
+            var statusMessage = getStatusMessage(visitor, additionalErrors, additionalProgresses, integrationBlockers, warnings,
+                    reviewNeeded, regularIssuesMap, jepIssue, issueToCsrMap.values(), version, tooFewReviewers);
             var updatedBody = updateStatusMessage(statusMessage);
             var title = pr.title();
 
-            var amendedHash = checkablePullRequest.amendManualReviewers(localHash, censusInstance.namespace(), original.map(Commit::hash).orElse(null));
+            var amendedHash = checkablePullRequest.amendManualReviewersAndStaleReviewers(localHash, censusInstance.namespace(), original.map(Commit::hash).orElse(null));
             var commit = localRepo.lookup(amendedHash).orElseThrow();
             var commitMessage = String.join("\n", commit.message());
-            var readyForIntegration = readyForReview &&
-                                      visitor.messages().isEmpty() &&
-                                      !additionalProgresses.containsValue(false) &&
-                                      integrationBlockers.isEmpty() &&
-                                      !statusMessage.contains(TEMPORARY_ISSUE_FAILURE_MARKER);
-            if (!reviewNeeded) {
-                // Reviews are not needed for clean backports unless this repo is configured with reviewCleanBackport enabled
-                readyForIntegration = readyForReview &&
-                                      !additionalProgresses.containsValue(false) &&
-                                      integrationBlockers.isEmpty() &&
-                                      !statusMessage.contains(TEMPORARY_ISSUE_FAILURE_MARKER);
-            }
+
+            var readyToPostApprovalNeededComment = readyForReview &&
+                    !visitor.hasErrors(reviewNeeded) &&
+                    integrationBlockers.isEmpty() &&
+                    !statusMessage.contains(TEMPORARY_ISSUE_FAILURE_MARKER);
+
+            var readyForIntegration = readyToPostApprovalNeededComment &&
+                    !additionalProgresses.containsValue(false);
 
             updateMergeReadyComment(readyForIntegration, commitMessage, rebasePossible);
             if (readyForIntegration && rebasePossible) {
@@ -1300,6 +1498,19 @@ class CheckRun {
                 newLabels.add("merge-conflict");
             } else {
                 newLabels.remove("merge-conflict");
+            }
+
+            if (!PullRequestUtils.isMerge(pr) && !newLabels.contains("ready") && missingApprovalRequest
+                    && approvalNeeded() && approval.approvalComment() && readyToPostApprovalNeededComment) {
+                for (var entry : additionalProgresses.entrySet()) {
+                    if (!entry.getKey().endsWith("needs " + approval.approvalTerm()) && !entry.getValue()) {
+                        readyToPostApprovalNeededComment = false;
+                        break;
+                    }
+                }
+                if (readyToPostApprovalNeededComment) {
+                    postApprovalNeededComment();
+                }
             }
 
             if (pr.sourceRepository().isPresent()) {
@@ -1324,7 +1535,7 @@ class CheckRun {
             }
 
             // Calculate current metadata to avoid unnecessary future checks
-            var metadata = workItem.getMetadata(workItem.getPRMetadata(censusInstance, title, updatedBody, pr.comments(), activeReviews,
+            var metadata = workItem.getMetadata(workItem.getPRMetadata(censusInstance, title, updatedBody, comments, activeReviews,
                     newLabels, pr.targetRef(), pr.isDraft()), workItem.getIssueMetadata(updatedBody), expiresIn);
             checkBuilder.metadata(metadata);
         } catch (Exception e) {
@@ -1359,13 +1570,8 @@ class CheckRun {
         }
     }
 
-    private boolean isFileUpdated(String filename, Hash hash) throws IOException {
-        return !localRepo.files(hash, Path.of(filename)).isEmpty() &&
-                localRepo.commits(hash.hex(), 1).stream()
-                        .anyMatch(commit -> commit.parentDiffs().stream()
-                                .anyMatch(diff -> diff.patches().stream()
-                                        .anyMatch(patch -> (patch.source().path().isPresent() && patch.source().path().get().toString().equals(filename))
-                                                || ((patch.target().path().isPresent() && patch.target().path().get().toString().equals(filename))))));
+    private boolean isFileUpdated(Path filename, Hash from, Hash to) throws IOException {
+        return !localRepo.diff(from, to, List.of(filename)).patches().isEmpty();
     }
 
     private void updateCSRLabel(JdkVersion version, Map<String, IssueTrackerIssue> csrIssueTrackerIssueMap) {
@@ -1394,7 +1600,7 @@ class CheckRun {
             var resolutionOpt = csr.resolution();
             if (resolutionOpt.isEmpty()) {
                 notExistingUnresolvedCSR = false;
-                if (!pr.labelNames().contains(CSR_LABEL)) {
+                if (!newLabels.contains(CSR_LABEL)) {
                     log.info("CSR issue resolution is null for csr issue " + csr.id() + " for " + describe(pr) + ", adding the CSR label");
                     newLabels.add(CSR_LABEL);
                 } else {
@@ -1407,7 +1613,7 @@ class CheckRun {
 
             if (csr.state() != org.openjdk.skara.issuetracker.Issue.State.CLOSED) {
                 notExistingUnresolvedCSR = false;
-                if (!pr.labelNames().contains(CSR_LABEL)) {
+                if (!newLabels.contains(CSR_LABEL)) {
                     log.info("CSR issue state is not closed for csr issue " + csr.id() + " for " + describe(pr) + ", adding the CSR label");
                     newLabels.add(CSR_LABEL);
                 } else {
@@ -1423,7 +1629,7 @@ class CheckRun {
                     // Because the PR author with the role of Committer may withdraw a CSR that
                     // a Reviewer had requested and integrate it without satisfying that requirement.
                     log.info("CSR closed and withdrawn for csr issue " + csr.id() + " for " + describe(pr));
-                } else if (!pr.labelNames().contains(CSR_LABEL)) {
+                } else if (!newLabels.contains(CSR_LABEL)) {
                     notExistingUnresolvedCSR = false;
                     log.info("CSR issue resolution is not 'Approved' for csr issue " + csr.id() + " for " + describe(pr) + ", adding the CSR label");
                     newLabels.add(CSR_LABEL);
@@ -1435,9 +1641,36 @@ class CheckRun {
                 existingApprovedCSR = true;
             }
         }
-        if (notExistingUnresolvedCSR && (!isCSRNeeded(pr.comments()) || existingApprovedCSR) && pr.labelNames().contains(CSR_LABEL)) {
+        if (notExistingUnresolvedCSR && (!isCSRNeeded(comments) || existingApprovedCSR) && newLabels.contains(CSR_LABEL)) {
             log.info("All CSR issues closed and approved for " + describe(pr) + ", removing CSR label");
             newLabels.remove(CSR_LABEL);
+        }
+    }
+
+    private void updateBackportCSRLabel(Map<String, List<IssueTrackerIssue>> issueToAllCsrsMap, Map<String, IssueTrackerIssue> issueToCsrMap) {
+        // Ignore withdrawn CSRs
+        boolean associatedWithValidCSR = issueToCsrMap.values().stream()
+                .anyMatch(value -> !isWithdrawnCSR(value));
+
+        if (newLabels.contains("backport") && !newLabels.contains("csr") && !associatedWithValidCSR && !isCSRManuallyUnneeded(comments)) {
+            boolean hasResolvedCSR = issueToAllCsrsMap.values().stream()
+                    .flatMap(List::stream)
+                    .anyMatch(csrIssue -> csrIssue.state() == org.openjdk.skara.issuetracker.Issue.State.CLOSED &&
+                            csrIssue.resolution().map(res -> res.equals("Approved")).orElse(false));
+
+            if (hasResolvedCSR) {
+                newLabels.add("csr");
+                var existing = findComment(BACKPORT_CSR_MARKER);
+                if (existing.isPresent()) {
+                    return;
+                }
+                pr.addComment("At least one of the issues associated with this backport has a resolved " +
+                        "[CSR](" + CSR_PROCESS_LINK + ") for a different version. As this means that this " +
+                        "backport may also need a CSR, the `csr` label is being added to this pull request " +
+                        "to signal this potential requirement. The command `/csr unneeded` can be used to " +
+                        "remove the label in case a CSR is not needed." +
+                        BACKPORT_CSR_MARKER);
+            }
         }
     }
 
@@ -1454,8 +1687,70 @@ class CheckRun {
         return false;
     }
 
+    private boolean isCSRManuallyUnneeded(List<Comment> comments) {
+        for (int i = comments.size() - 1; i >= 0; i--) {
+            var comment = comments.get(i);
+            if (comment.body().contains(CSR_NEEDED_MARKER)) {
+                return false;
+            }
+            if (comment.body().contains(CSR_UNNEEDED_MARKER)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String describe(PullRequest pr) {
         return pr.repository().name() + "#" + pr.id();
     }
 
+    private boolean approvalNeeded() {
+        if (approval != null) {
+            if (realTargetRef == null) {
+                realTargetRef = PreIntegrations.realTargetRef(pr);
+            }
+            return approval.needsApproval(realTargetRef);
+        }
+        return false;
+    }
+
+    private void postApprovalNeededComment() {
+        var existing = findComment(APPROVAL_NEEDED_MARKER);
+        if (existing.isPresent()) {
+            return;
+        }
+        String message = "⚠️  @" + pr.author().username() +
+                " This change is now ready for you to apply for [" + approval.approvalTerm() + "](" + approval.documentLink() + "). " +
+                "This can be done directly in each associated issue or by using the " +
+                "[/approval](https://wiki.openjdk.org/display/SKARA/Pull+Request+Commands#PullRequestCommands-/approval) " +
+                "command." +
+                APPROVAL_NEEDED_MARKER;
+        pr.addComment(message);
+    }
+
+    /**
+     * Creates a map from issue ID to a list of all CSRs linked from the issue or any backport of the issue.
+     */
+    private Map<String, List<IssueTrackerIssue>> issueToAllCsrsMap(Map<Issue, Optional<IssueTrackerIssue>> regularIssuesMap) {
+        Map<String, List<IssueTrackerIssue>> issueToAllCsrsMap = new HashMap<>();
+        regularIssuesMap.values().stream()
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .forEach(issue -> {
+                    Backports.csrLink(issue)
+                            .flatMap(Link::issue)
+                            .ifPresent(csr -> issueToAllCsrsMap.computeIfAbsent(issue.id(), k -> new ArrayList<>()).add(csr));
+
+                    Backports.findBackports(issue, false).stream()
+                            .map(Backports::csrLink)
+                            .filter(Optional::isPresent)
+                            .map(Optional::get)
+                            .map(Link::issue)
+                            .filter(Optional::isPresent)
+                            .map(Optional::get)
+                            .forEach(backportCsr -> issueToAllCsrsMap.computeIfAbsent(issue.id(), k -> new ArrayList<>()).add(backportCsr));
+
+                });
+        return issueToAllCsrsMap;
+    }
 }

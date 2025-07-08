@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import org.openjdk.skara.network.URIBuilder;
 import org.openjdk.skara.vcs.*;
 import org.openjdk.skara.vcs.openjdk.Issue;
 import org.openjdk.skara.version.Version;
+import org.openjdk.skara.webrev.DiffTooLargeException;
 import org.openjdk.skara.webrev.Webrev;
 
 import java.io.*;
@@ -89,7 +90,7 @@ class WebrevStorage {
         this.generateJSON = generateJSON;
     }
 
-    private void generateHTML(PullRequest pr, ReadOnlyRepository localRepository, Path folder, Diff diff, Hash base, Hash head) throws IOException {
+    private void generateHTML(PullRequest pr, ReadOnlyRepository localRepository, Path folder, Diff diff, Hash base, Hash head) throws IOException, DiffTooLargeException {
         Files.createDirectories(folder);
         var fullName = pr.author().fullName();
         var builder = Webrev.repository(localRepository)
@@ -127,7 +128,7 @@ class WebrevStorage {
         }
     }
 
-    private void generateJSON(PullRequest pr, ReadOnlyRepository localRepository, Path folder, Diff diff, Hash base, Hash head) throws IOException {
+    private void generateJSON(PullRequest pr, ReadOnlyRepository localRepository, Path folder, Diff diff, Hash base, Hash head) throws IOException, DiffTooLargeException {
         Files.createDirectories(folder);
         var builder = Webrev.repository(localRepository)
                             .output(folder)
@@ -231,7 +232,7 @@ class WebrevStorage {
                         if (retryCount > 5) {
                             throw e;
                         }
-                        var updated = localStorage.fetch(remote, storageRef);
+                        var updated = localStorage.fetch(remote, storageRef).orElseThrow();
                         localStorage.rebase(updated, author.fullName().orElseThrow(), author.address());
                         hash = localStorage.head();
                     }
@@ -255,7 +256,7 @@ class WebrevStorage {
         var uriBuilder = URIBuilder.base(uri);
 
         while (Instant.now().isBefore(end)) {
-            var uncachedUri = uriBuilder.setQuery(Map.of("nocache", UUID.randomUUID().toString())).build();
+            var uncachedUri = uriBuilder.setQuery(Map.of("nocache", List.of(UUID.randomUUID().toString()))).build();
             log.fine("Validating webrev URL: " + uncachedUri);
             var request = HttpRequest.newBuilder(uncachedUri)
                                      .timeout(Duration.ofSeconds(30))
@@ -276,7 +277,7 @@ class WebrevStorage {
                     }
                 }
                 log.info(response.statusCode() + " when checking " + uncachedUri + " - waiting...");
-                Thread.sleep(Duration.ofSeconds(10).toMillis());
+                Thread.sleep(Duration.ofSeconds(10));
             } catch (InterruptedException ignored) {
             }
         }
@@ -284,19 +285,19 @@ class WebrevStorage {
         throw new RuntimeException("No success response from " + uri + " within " + timeout);
     }
 
-    private URI createAndArchive(PullRequest pr, Repository localRepository, Path scratchPath, Diff diff, Hash base, Hash head, String identifier) {
+    private URI createAndArchive(PullRequest pr, Repository localRepository, Path jsonScratchPath, Path htmlScratchPath,
+                                 Diff diff, Hash base, Hash head, String identifier,
+                                 Repository jsonLocalStorage, Repository htmlLocalStorage) throws DiffTooLargeException {
         try {
             if (!generateHTML && !generateJSON) {
                 return null;
             }
             var relativeFolder = baseFolder.resolve(String.format("%s/%s", pr.id(), identifier));
-            var outputFolder = scratchPath.resolve(relativeFolder);
             var placeholder = generatePlaceholder(pr, base, head);
             URI uri = null;
 
             if (generateJSON) {
-                var jsonLocalStorage = Repository.materialize(scratchPath, jsonStorage.authenticatedUrl(),
-                                                              "+" + storageRef + ":mlbridge_webrevs");
+                var outputFolder = jsonScratchPath.resolve(relativeFolder);
                 if (Files.exists(outputFolder)) {
                     clearDirectory(outputFolder);
                 }
@@ -308,8 +309,7 @@ class WebrevStorage {
                 uri = URI.create(baseUri.toString() + "?repo=" + repoName + "&pr=" + pr.id() + "&range=" + identifier);
             }
             if (generateHTML) {
-                var htmlLocalStorage = Repository.materialize(scratchPath, htmlStorage.authenticatedUrl(),
-                                                              "+" + storageRef + ":mlbridge_webrevs");
+                var outputFolder = htmlScratchPath.resolve(relativeFolder);
                 if (Files.exists(outputFolder)) {
                     clearDirectory(outputFolder);
                 }
@@ -325,24 +325,52 @@ class WebrevStorage {
             throw new UncheckedIOException(e);
         }
     }
-
     interface WebrevGenerator {
         WebrevDescription generate(Hash base, Hash head, String identifier, WebrevDescription.Type type);
+
         WebrevDescription generate(Diff diff, String identifier, WebrevDescription.Type type, String description);
     }
 
-    WebrevGenerator generator(PullRequest pr, Repository localRepository, Path scratchPath) {
+    WebrevGenerator generator(PullRequest pr, Repository localRepository, Path jsonScratchPath, Path htmlScratchPath,
+                              HostedRepositoryPool hostedRepositoryPool) {
+
         return new WebrevGenerator() {
+            Repository jsonLocalStorage = null;
+            Repository htmlLocalStorage = null;
+
+            private void initializeLocalStorage() {
+                try {
+                    if (generateJSON && jsonLocalStorage == null && !(jsonStorage == null)) {
+                        jsonLocalStorage = hostedRepositoryPool.checkout(jsonStorage, storageRef, jsonScratchPath);
+                    }
+                    if (generateHTML && htmlLocalStorage == null && !(htmlStorage == null)) {
+                        htmlLocalStorage = hostedRepositoryPool.checkout(htmlStorage, storageRef, htmlScratchPath);
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+
             @Override
             public WebrevDescription generate(Hash base, Hash head, String identifier, WebrevDescription.Type type) {
-                var uri = createAndArchive(pr, localRepository, scratchPath, null, base, head, identifier);
-                return new WebrevDescription(uri, type);
+                initializeLocalStorage();
+                try {
+                    var uri = createAndArchive(pr, localRepository, jsonScratchPath, htmlScratchPath, null, base, head, identifier, jsonLocalStorage, htmlLocalStorage);
+                    return new WebrevDescription(uri, type, false);
+                } catch (DiffTooLargeException e) {
+                    return new WebrevDescription(null, type, true);
+                }
             }
 
             @Override
             public WebrevDescription generate(Diff diff, String identifier, WebrevDescription.Type type, String description) {
-                var uri = createAndArchive(pr, localRepository, scratchPath, diff, diff.from(), diff.to(), identifier);
-                return new WebrevDescription(uri, type, description);
+                initializeLocalStorage();
+                try {
+                    var uri = createAndArchive(pr, localRepository, jsonScratchPath, htmlScratchPath, diff, diff.from(), diff.to(), identifier, jsonLocalStorage, htmlLocalStorage);
+                    return new WebrevDescription(uri, type, description, false);
+                } catch (DiffTooLargeException e) {
+                    return new WebrevDescription(null, type, description, true);
+                }
             }
         };
     }

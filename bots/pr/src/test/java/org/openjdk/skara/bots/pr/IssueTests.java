@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -223,6 +223,14 @@ class IssueTests {
             assertLastCommentContains(pr, ": Second");
             assertLastCommentContains(pr, ": Third");
 
+            // Update the title of issue2 and issue3
+            issue2.setTitle("Second2");
+            issue3.setTitle("Third3");
+            pr.setBody("update this pr");
+            TestBotRunner.runPeriodicItems(prBot);
+            // PR body shouldn't contain title mismatch warning
+            assertFalse(pr.store().body().contains("Title mismatch between PR and JBS for issue"));
+
             // Remove one
             pr.addComment("/issue remove " + issue2.id());
             TestBotRunner.runPeriodicItems(prBot);
@@ -242,7 +250,7 @@ class IssueTests {
                             .findFirst()
                             .orElseThrow();
             assertTrue(preview.contains(issue1Number + ": Main"));
-            assertTrue(preview.contains(issue3Number + ": Third"));
+            assertTrue(preview.contains(issue3Number + ": Third3"));
             assertFalse(preview.contains("Second"));
 
             // Integrate
@@ -262,7 +270,7 @@ class IssueTests {
 
             // The additional issues should be present in the commit message
             assertEquals(List.of(issue1Number + ": Main",
-                                 issue3Number + ": Third",
+                                 issue3Number + ": Third3",
                                  "",
                                  "Reviewed-by: integrationreviewer1"), headCommit.message());
         }
@@ -532,123 +540,10 @@ class IssueTests {
 
     private static IssueTrackerIssue issueFromLastComment(PullRequest pr, IssueProject issueProject) {
         var comments = pr.comments();
-        var lastComment = comments.get(comments.size() - 1);
+        var lastComment = comments.getLast();
         var addedIssueMatcher = addedIssuePattern.matcher(lastComment.body());
         assertTrue(addedIssueMatcher.find(), lastComment.body());
         return issueProject.issue(addedIssueMatcher.group(1)).orElseThrow();
-    }
-
-    @Test
-    void createIssue(TestInfo testInfo) throws IOException {
-        try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory()) {
-            var author = credentials.getHostedRepository();
-            var integrator = credentials.getHostedRepository();
-            var issues = credentials.getIssueProject();
-
-            var censusBuilder = credentials.getCensusBuilder()
-                                           .addAuthor(author.forge().currentUser().id());
-            var prBot = PullRequestBot.newBuilder()
-                    .repo(integrator)
-                    .censusRepo(censusBuilder.build())
-                    .issueProject(issues)
-                    .issuePRMap(new HashMap<>())
-                    .build();
-
-            // Populate the projects repository
-            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
-            var masterHash = localRepo.resolve("master").orElseThrow();
-            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
-            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
-
-            // Make a change with a corresponding PR
-            var editHash = CheckableRepository.appendAndCommit(localRepo);
-            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
-            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
-            pr.setBody("This is the body");
-
-            // Create an issue
-            pr.addComment("/issue create hotspot");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // Verify it
-            var issue = issueFromLastComment(pr, issues);
-            assertEquals("This is a pull request", issue.title());
-            assertEquals("hotspot", issue.properties().get("components").asArray().get(0).asString());
-            assertEquals("This is the body", issue.body());
-
-            var updatedPr = author.pullRequest(pr.id());
-            var issueNr = issue.id().split("-", 2)[1];
-            assertEquals(issueNr + ": This is a pull request", updatedPr.title());
-        }
-    }
-
-    @Test
-    void createIssueParameterized(TestInfo testInfo) throws IOException {
-        try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory()) {
-            var author = credentials.getHostedRepository();
-            var integrator = credentials.getHostedRepository();
-            var issues = credentials.getIssueProject();
-
-            var censusBuilder = credentials.getCensusBuilder()
-                                           .addAuthor(author.forge().currentUser().id());
-            var prBot = PullRequestBot.newBuilder()
-                    .repo(integrator)
-                    .censusRepo(censusBuilder.build())
-                    .issueProject(issues)
-                    .issuePRMap(new HashMap<>())
-                    .build();
-
-            // Populate the projects repository
-            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
-            var masterHash = localRepo.resolve("master").orElseThrow();
-            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
-            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
-
-            // Make a change with a corresponding PR
-            var editHash = CheckableRepository.appendAndCommit(localRepo);
-            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
-            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
-
-            // Create an issue
-            pr.addComment("/issue create P2 hotspot");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // Verify it
-            var issue = issueFromLastComment(pr, issues);
-            assertEquals("This is a pull request", issue.title());
-            assertEquals("hotspot", issue.properties().get("components").asArray().get(0).asString());
-            assertEquals("2", issue.properties().get("priority").asString());
-
-            // Reset and try some more
-            pr.setTitle("This is another pull request");
-
-            // Create an issue
-            pr.addComment("/issue create P4 hotspot");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // Verify it
-            issue = issueFromLastComment(pr, issues);
-            assertEquals("This is another pull request", issue.title());
-            assertEquals("hotspot", issue.properties().get("components").asArray().get(0).asString());
-            assertEquals("4", issue.properties().get("priority").asString());
-            assertEquals("enhancement", issue.properties().get("issuetype").asString().toLowerCase());
-
-            // Reset and try some more
-            pr.setTitle("This is yet another pull request");
-
-            // Create an issue
-            pr.addComment("/issue create core-libs/java.io");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // Verify it
-            issue = issueFromLastComment(pr, issues);
-            assertEquals("This is yet another pull request", issue.title());
-            assertEquals("core-libs", issue.properties().get("components").asArray().get(0).asString());
-            assertEquals("enhancement", issue.properties().get("issuetype").asString().toLowerCase());
-            assertEquals("java.io", issue.properties().get(SUBCOMPONENT).asString());
-        }
     }
 
     @Test
@@ -760,11 +655,11 @@ class IssueTests {
             assertTrue(pr.title().startsWith(issue1.id().split("-")[1] + ": "));
 
             var comments = pr.comments();
-            assertEquals(3, comments.size());
+            assertEquals(4, comments.size());
 
-            assertTrue(comments.get(0).body().contains("current title does not contain an issue reference"));
-            assertTrue(comments.get(1).body().contains("Adding additional issue to"));
+            assertTrue(comments.get(1).body().contains("current title does not contain an issue reference"));
             assertTrue(comments.get(2).body().contains("Adding additional issue to"));
+            assertTrue(comments.get(3).body().contains("Adding additional issue to"));
         }
     }
 

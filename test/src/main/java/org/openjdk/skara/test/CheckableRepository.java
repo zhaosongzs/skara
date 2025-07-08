@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@ package org.openjdk.skara.test;
 import org.openjdk.skara.vcs.*;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.Set;
 
@@ -33,13 +32,13 @@ public class CheckableRepository {
     private static String markerLine = "The very first line\n";
 
     private static Path checkableFile(Path path) throws IOException {
-        try (var checkable = Files.newBufferedReader(path.resolve(".checkable/name.txt"), StandardCharsets.UTF_8)) {
+        try (var checkable = Files.newBufferedReader(path.resolve(".checkable/name.txt"))) {
             var checkableName = checkable.readLine();
             return path.resolve(checkableName);
         }
     }
 
-    public static Repository init(Path path, VCS vcs, Path appendableFilePath, Set<String> checks, String version) throws IOException {
+    public static Repository init(Path path, VCS vcs, Path appendableFilePath, Set<String> errorChecks, Set<String> warningChecks, String version) throws IOException {
         var repo = Repository.init(path, vcs);
 
         Files.createDirectories(path.resolve(".checkable"));
@@ -68,7 +67,10 @@ public class CheckableRepository {
             output.append("\n");
             output.append("[checks]\n");
             output.append("error=");
-            output.append(String.join(",", checks));
+            output.append(String.join(",", errorChecks));
+            output.append("\n");
+            output.append("warning=");
+            output.append(String.join(",", warningChecks));
             output.append("\n\n");
             output.append("[census]\n");
             output.append("version=0\n");
@@ -79,6 +81,14 @@ public class CheckableRepository {
             output.append("\n");
             output.append("[checks \"reviewers\"]\n");
             output.append("reviewers=1\n");
+            output.append("\n");
+            output.append("[checks \"copyright\"]\n");
+            output.append("files=.*\\.txt\n");
+            output.append("oracle_locator=.*Copyright \\(c\\)(.*)Oracle and/or its affiliates\\. All rights reserved\\.\n");
+            output.append("oracle_validator=.*Copyright \\(c\\) (\\d{4})(?:, (\\d{4}))?, Oracle and/or its affiliates\\. All rights reserved\\.\n");
+            output.append("oracle_required=true\n");
+            output.append("redhat_locator=.*Copyright \\(c\\)(.*)Red Hat, Inc\\.\n");
+            output.append("redhat_validator=.*Copyright \\(c\\) (\\d{4})(?:, (\\d{4}))?, Red Hat, Inc\\.\n");
         }
         repo.add(checkConf);
 
@@ -87,8 +97,12 @@ public class CheckableRepository {
         return repo;
     }
 
+    public static Repository init(Path path, VCS vcs, Path appendableFilePath, Set<String> errorChecks, String version) throws IOException {
+        return init(path, vcs, appendableFilePath, errorChecks, Set.of(), version);
+    }
+
     public static Repository init(Path path, VCS vcs, Path appendableFilePath) throws IOException {
-        return init(path, vcs, appendableFilePath, Set.of("author", "reviewers", "whitespace"), "0.1");
+        return init(path, vcs, appendableFilePath, Set.of("author", "reviewers", "whitespace"), Set.of(), "0.1");
     }
 
     public static Repository init(Path path, VCS vcs) throws IOException {

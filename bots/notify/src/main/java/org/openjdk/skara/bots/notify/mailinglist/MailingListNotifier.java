@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -194,11 +194,11 @@ class MailingListNotifier implements Notifier, RepositoryListener {
         var printer = new PrintWriter(writer);
 
         for (var commit : commits) {
-            printer.println(CommitFormatters.toText(repository, commit));
+            printer.println(CommitFormatters.toText(repository, commit, branch));
         }
 
         var subject = commitsToSubject(repository, commits, branch);
-        var lastCommit = commits.get(commits.size() - 1);
+        var lastCommit = commits.getLast();
         var commitAddress = filteredAuthor(EmailAddress.from(lastCommit.committer().name(), lastCommit.committer().email()));
         var email = Email.create(subject, writer.toString())
                          .sender(sender)
@@ -246,17 +246,17 @@ class MailingListNotifier implements Notifier, RepositoryListener {
             return;
         }
         if (!reportNewBuilds) {
-            onNewTagCommit(repository, localRepository, scratchPath, commits.get(commits.size() - 1), tag.tag(), annotation);
+            onNewTagCommit(repository, localRepository, scratchPath, commits.getLast(), tag.tag(), annotation);
             return;
         }
         var writer = new StringWriter();
         var printer = new PrintWriter(writer);
 
-        var taggedCommit = commits.get(commits.size() - 1);
+        var taggedCommit = commits.getLast();
         if (annotation != null) {
             printer.println(tagAnnotationToText(repository, annotation));
         }
-        printer.println(CommitFormatters.toTextBrief(repository, taggedCommit));
+        printer.println(CommitFormatters.toTextBrief(repository, taggedCommit, null));
 
         printer.println("The following commits are included in " + tag.tag());
         printer.println("========================================================");
@@ -302,7 +302,7 @@ class MailingListNotifier implements Notifier, RepositoryListener {
         if (annotation != null) {
             printer.println(tagAnnotationToText(repository, annotation));
         }
-        printer.println(CommitFormatters.toTextBrief(repository, commit));
+        printer.println(CommitFormatters.toTextBrief(repository, commit, null));
 
         var subject = tagToSubject(repository, commit.hash(), tag);
         var email = Email.create(subject, writer.toString())
@@ -368,7 +368,7 @@ class MailingListNotifier implements Notifier, RepositoryListener {
         }
 
         var subject = newBranchSubject(repository, localRepository, commits, parent, branch);
-        var finalAuthor = commits.size() > 0 ? commitToAuthor(commits.get(commits.size() - 1)) : sender;
+        var finalAuthor = commits.size() > 0 ? commitToAuthor(commits.getLast()) : sender;
 
         var email = Email.create(subject, writer.toString())
                          .sender(sender)

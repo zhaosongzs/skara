@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,16 +51,14 @@ public class PullRequestUtils {
     private static Optional<Hash> fetchRef(Repository localRepo, URI uri, String ref) {
         // Just a plain name - is this a branch?
         try {
-            var hash = localRepo.fetch(uri, "+" + ref + ":refs/heads/merge_source", false);
-            return Optional.of(hash);
+            return localRepo.fetch(uri, "+" + ref + ":refs/heads/merge_source", false);
         } catch (IOException e) {
             // Ignored
         }
 
         // Perhaps it is an actual tag object - it cannot be fetched to a branch ref
         try {
-            var hash = localRepo.fetch(uri, "+" + ref + ":refs/tags/merge_source_tag", false);
-            return Optional.of(hash);
+            return localRepo.fetch(uri, "+" + ref + ":refs/tags/merge_source_tag", false);
         } catch (IOException e) {
             // Ignored
         }
@@ -164,7 +162,7 @@ public class PullRequestUtils {
 
     public static Repository materialize(HostedRepositoryPool hostedRepositoryPool, PullRequest pr, Path path) throws IOException {
         var localRepo = hostedRepositoryPool.checkout(pr.repository(), pr.headHash().hex(), path);
-        localRepo.fetch(pr.repository().authenticatedUrl(), "+" + pr.targetRef() + ":prutils_targetref", false);
+        localRepo.fetch(pr.repository().authenticatedUrl(), "+" + pr.targetRef() + ":prutils_targetref", false).orElseThrow();
         return localRepo;
     }
 
@@ -232,12 +230,16 @@ public class PullRequestUtils {
     public static void postPullRequestLinkComment(Issue issue, PullRequest pr) {
         var alreadyPostedComment = issue.comments().stream()
                 .filter(comment -> comment.author().equals(issue.project().issueTracker().currentUser()))
-                .anyMatch(comment -> comment.body().contains(pullRequestMessage) && comment.body().contains(pr.webUrl().toString()));
-        if (!alreadyPostedComment) {
-            String builder = pullRequestMessage + "\n" +
-                    "URL: " + pr.webUrl().toString() + "\n" +
-                    "Date: " + pr.createdAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss +0000"));
-            issue.addComment(builder);
+                .filter(comment -> comment.body().contains(pullRequestMessage) && comment.body().contains(pr.webUrl().toString()))
+                .findFirst();
+        String message = pullRequestMessage + "\n" +
+                "Branch: " + pr.targetRef() + "\n" +
+                "URL: " + pr.webUrl().toString() + "\n" +
+                "Date: " + pr.createdAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss +0000"));
+        if (alreadyPostedComment.isEmpty()) {
+            issue.addComment(message);
+        } else if (!alreadyPostedComment.get().body().equals(message)) {
+            issue.updateComment(alreadyPostedComment.get().id(), message);
         }
     }
 
@@ -275,7 +277,7 @@ public class PullRequestUtils {
         if (!lines.get(0).equals(pullRequestMessage)) {
             return Optional.empty();
         }
-        var urlMatcher = PR_URL_PATTERN.matcher(lines.get(1));
+        var urlMatcher = PR_URL_PATTERN.matcher(lines.get(2));
         if (urlMatcher.matches()) {
             var url = urlMatcher.group(1);
             try {

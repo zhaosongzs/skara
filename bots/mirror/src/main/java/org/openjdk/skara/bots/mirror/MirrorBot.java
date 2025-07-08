@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,27 +49,28 @@ class MirrorBot implements Bot, WorkItem {
     private final List<Pattern> branchPatterns;
     private final boolean includeTags;
     private final boolean onlyTags;
+    private final List<String> refspecs;
 
     MirrorBot(Path storage, HostedRepository from, HostedRepository to) {
-        this(storage, from, to, List.of(), true, false);
+        this(storage, from, to, List.of(), true, false, List.of());
     }
 
     MirrorBot(Path storage, HostedRepository from, HostedRepository to, List<Pattern> branchPatterns,
-              boolean includeTags, boolean onlyTags) {
+              boolean includeTags, boolean onlyTags, List<String> refspecs) {
         this.storage = storage;
         this.from = from;
         this.to = to;
         this.branchPatterns = branchPatterns;
         this.includeTags = includeTags;
         this.onlyTags = onlyTags;
+        this.refspecs = refspecs;
     }
 
     @Override
     public boolean concurrentWith(WorkItem other) {
-        if (!(other instanceof MirrorBot)) {
+        if (!(other instanceof MirrorBot otherBot)) {
             return true;
         }
-        var otherBot = (MirrorBot) other;
         return !to.name().equals(otherBot.to.name());
     }
 
@@ -91,10 +92,11 @@ class MirrorBot implements Bot, WorkItem {
                 repo = Repository.get(dir).orElseGet(() -> {
                     log.info("The existing scratch directory is not a valid repository. Recloning " + from.name());
                     try {
-                        Files.walk(dir)
-                                .map(Path::toFile)
-                                .sorted(Comparator.reverseOrder())
-                                .forEach(File::delete);
+                        try (var paths = Files.walk(dir)) {
+                            paths.map(Path::toFile)
+                                 .sorted(Comparator.reverseOrder())
+                                 .forEach(File::delete);
+                        }
                         return Repository.mirror(from.authenticatedUrl(), dir);
                     } catch (IOException io) {
                         throw new RuntimeException(io);
@@ -103,14 +105,14 @@ class MirrorBot implements Bot, WorkItem {
             }
 
             log.info("Pulling " + from.name());
-            repo.fetchAll(from.authenticatedUrl(), includeTags || onlyTags);
+            repo.fetchAll(from.authenticatedUrl(), includeTags || onlyTags || !refspecs.isEmpty());
             if (onlyTags) {
                 log.info("Pushing tags to " + to.name());
                 repo.pushTags(to.authenticatedUrl(), true);
             } else if (branchPatterns.isEmpty() && includeTags) {
                 log.info("Pushing tags and branches to " + to.name());
                 repo.pushAll(to.authenticatedUrl(), true);
-            } else {
+            } else if (!branchPatterns.isEmpty()) {
                 for (var branch : repo.branches()) {
                     if (branchPatterns.stream().anyMatch(p -> p.matcher(branch.name()).matches())) {
                         var hash = repo.resolve(branch);
@@ -123,6 +125,11 @@ class MirrorBot implements Bot, WorkItem {
                         }
                     }
                 }
+            } else if (!refspecs.isEmpty()) {
+                for (var refspec : refspecs) {
+                    log.info("Pushing using refspec " + refspec + " to " + to.name());
+                    repo.push(refspec, to.authenticatedUrl());
+                }
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -133,22 +140,26 @@ class MirrorBot implements Bot, WorkItem {
     @Override
     public String toString() {
         var name = "MirrorBot@" + from.name() + "->" + to.name();
-        if (branchPatterns.isEmpty()) {
-            if (onlyTags) {
-                name += " ()";
+        if (!refspecs.isEmpty()) {
+            name += " (" + String.join(",", refspecs) + ")";
+        } else {
+            if (branchPatterns.isEmpty()) {
+                if (onlyTags) {
+                    name += " ()";
+                } else {
+                    name += " (*)";
+                }
             } else {
-                name += " (*)";
+                var branchPatterns = this.branchPatterns.stream().map(Pattern::toString).collect(Collectors.toList());
+                name += " (" + String.join(",", branchPatterns) + ")";
             }
-        } else {
-            var branchPatterns = this.branchPatterns.stream().map(Pattern::toString).collect(Collectors.toList());
-            name += " (" + String.join(",", branchPatterns) + ")";
-        }
-        if (onlyTags) {
-            name += " [tags only]";
-        } else if (includeTags) {
-            name += " [tags included]";
-        } else {
-            name += " [tags excluded]";
+            if (onlyTags) {
+                name += " [tags only]";
+            } else if (includeTags) {
+                name += " [tags included]";
+            } else {
+                name += " [tags excluded]";
+            }
         }
         return name;
     }
@@ -183,5 +194,9 @@ class MirrorBot implements Bot, WorkItem {
 
     public boolean isOnlyTags() {
         return onlyTags;
+    }
+
+    public List<String> getRefspecs() {
+        return refspecs;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,18 +37,19 @@ class PullRequestPrunerBotWorkItem implements WorkItem {
     private final Logger log = Logger.getLogger("org.openjdk.skara.bots");;
     private final PullRequest pr;
     private final Duration maxAge;
+    private final Set<String> ignoredUsers;
 
-    PullRequestPrunerBotWorkItem(PullRequest pr, Duration maxAge) {
+    PullRequestPrunerBotWorkItem(PullRequest pr, Duration maxAge, Set<String> ignoredUsers) {
         this.pr = pr;
         this.maxAge = maxAge;
+        this.ignoredUsers = ignoredUsers;
     }
 
     @Override
     public boolean concurrentWith(WorkItem other) {
-        if (!(other instanceof PullRequestPrunerBotWorkItem)) {
+        if (!(other instanceof PullRequestPrunerBotWorkItem otherItem)) {
             return true;
         }
-        PullRequestPrunerBotWorkItem otherItem = (PullRequestPrunerBotWorkItem) other;
         if (!pr.isSame(otherItem.pr)) {
             return true;
         }
@@ -76,7 +77,10 @@ class PullRequestPrunerBotWorkItem implements WorkItem {
     public Collection<WorkItem> run(Path scratchPath) {
         var comments = pr.comments();
         if (comments.size() > 0) {
-            var lastComment = comments.get(comments.size() - 1);
+            var lastComment = comments.stream()
+                    .filter(comment -> !ignoredUsers.contains(comment.author().username()))
+                    .toList()
+                    .getLast();
             if (lastComment.author().equals(pr.repository().forge().currentUser()) && lastComment.body().contains(NOTICE_MARKER)) {
                 var message = "@" + pr.author().username() + " This pull request has been inactive for more than " +
                         formatDuration(maxAge.multipliedBy(2)) + " and will now be automatically closed. If you would " +
@@ -91,7 +95,7 @@ class PullRequestPrunerBotWorkItem implements WorkItem {
 
         var message = "@" + pr.author().username() + " This pull request has been inactive for more than " +
                 formatDuration(maxAge) + " and will be automatically closed if another " + formatDuration(maxAge) +
-                " passes without any activity. To avoid this, simply add a new comment to the pull request. Feel free " +
+                " passes without any activity. To avoid this, simply issue a `/touch` or `/keepalive` command to the pull request. Feel free " +
                 "to ask for assistance if you need help with progressing this pull request towards integration!";
 
         log.fine("Posting prune notification message");
@@ -123,9 +127,11 @@ public class PullRequestPrunerBot implements Bot {
     private final Logger log = Logger.getLogger("org.openjdk.skara.bots.bridgekeeper");
 
     private Duration currentMaxAge;
+    private Set<String> ignoredUsers;
 
-    PullRequestPrunerBot(Map<HostedRepository, Duration> maxAges) {
+    PullRequestPrunerBot(Map<HostedRepository, Duration> maxAges, Set<String> ignoredUsers) {
         this.maxAges = maxAges;
+        this.ignoredUsers = ignoredUsers;
     }
 
     @Override
@@ -152,20 +158,21 @@ public class PullRequestPrunerBot implements Bot {
         }
 
         // Latest prune-delaying action (deliberately excluding pr.updatedAt, as it can be updated spuriously)
-        var latestAction = List.of(Stream.of(pr.createdAt()),
+        var latestAction = Stream.of(Stream.of(pr.createdAt()),
                                    pr.comments().stream()
+                                     .filter(comment -> !ignoredUsers.contains(comment.author().username()))
                                      .map(Comment::updatedAt),
                                    pr.reviews().stream()
                                      .map(Review::createdAt),
-                                   pr.reviewComments().stream()
-                                     .map(Comment::updatedAt)).stream()
+                                   pr.reviewCommentsAsComments().stream()
+                                     .map(Comment::updatedAt))
                                .flatMap(Function.identity())
                                .max(ZonedDateTime::compareTo).orElseThrow();
 
         var actualMaxAge = pr.isDraft() ? currentMaxAge.multipliedBy(2) : currentMaxAge;
         var oldestAllowed = ZonedDateTime.now().minus(actualMaxAge);
         if (latestAction.isBefore(oldestAllowed)) {
-            var item = new PullRequestPrunerBotWorkItem(pr, actualMaxAge);
+            var item = new PullRequestPrunerBotWorkItem(pr, actualMaxAge, ignoredUsers);
             ret.add(item);
         }
 
@@ -184,5 +191,9 @@ public class PullRequestPrunerBot implements Bot {
 
     public Map<HostedRepository, Duration> getMaxAges() {
         return maxAges;
+    }
+
+    public Set<String> getIgnoredUsers() {
+        return ignoredUsers;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 package org.openjdk.skara.bots.mlbridge;
 
 import org.junit.jupiter.api.*;
+import org.openjdk.skara.bots.common.PullRequestConstants;
 import org.openjdk.skara.email.*;
 import org.openjdk.skara.forge.*;
 import org.openjdk.skara.issuetracker.Issue;
@@ -33,7 +34,6 @@ import org.openjdk.skara.test.*;
 import org.openjdk.skara.vcs.Repository;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.*;
 import java.util.*;
@@ -47,14 +47,13 @@ class MailingListBridgeBotTests {
     private final Logger log = Logger.getLogger("org.openjdk.skara.bots.mlbridge.test");
 
     private Optional<String> archiveContents(Path archive, String prId) {
-        try {
-            var mbox = Files.find(archive, 50, (path, attrs) -> path.toString().endsWith(".mbox"))
-                            .filter(path -> path.getFileName().toString().contains(prId))
+        try (var paths = Files.find(archive, 50, (path, attrs) -> path.toString().endsWith(".mbox"))) {
+            var mbox = paths.filter(path -> path.getFileName().toString().contains(prId))
                             .findAny();
             if (mbox.isEmpty()) {
                 return Optional.empty();
             }
-            return Optional.of(Files.readString(mbox.get(), StandardCharsets.UTF_8));
+            return Optional.of(Files.readString(mbox.get()));
         } catch (IOException e) {
             return Optional.empty();
         }
@@ -90,12 +89,12 @@ class MailingListBridgeBotTests {
     }
 
     private boolean webrevContains(Path webrev, String text) {
-        try {
-            var index = Files.find(webrev, 5, (path, attrs) -> path.toString().endsWith("index.html")).findAny();
+        try (var paths = Files.find(webrev, 5, (path, attrs) -> path.toString().endsWith("index.html"))) {
+            var index = paths.findAny();
             if (index.isEmpty()) {
                 return false;
             }
-            var lines = Files.readString(index.get(), StandardCharsets.UTF_8);
+            var lines = Files.readString(index.get());
             return lines.contains(text);
         } catch (IOException e) {
             return false;
@@ -190,17 +189,17 @@ class MailingListBridgeBotTests {
             TestBotRunner.runPeriodicItems(mlBot);
 
             //valid skara command - should not be archived
-            pr.addComment("/help");
+            pr.addComment("/skara   help");
             // Run another archive pass
             TestBotRunner.runPeriodicItems(mlBot);
 
             //Invalid skara command but starting with '/' - should be archived
-            pr.addComment("/some-text & more text");
+            pr.addComment("/skara some-text & more text");
             // Run another archive pass
             TestBotRunner.runPeriodicItems(mlBot);
 
             //Not a valid skara command with upper case letter - should be archived
-            pr.addComment("/Help");
+            pr.addComment("/skara Help");
             // Run another archive pass
             TestBotRunner.runPeriodicItems(mlBot);
 
@@ -226,8 +225,8 @@ class MailingListBridgeBotTests {
             assertFalse(archiveContains(archiveFolder.path(), "With several lines"));
             assertTrue(archiveContains(archiveFolder.path(), "do not ignore me /help"));
             assertFalse(archiveContains(archiveFolder.path(), "Available commands"));
-            assertTrue(archiveContains(archiveFolder.path(), "/some-text & more text"));
-            assertTrue(archiveContains(archiveFolder.path(), "/Help"));
+            assertTrue(archiveContains(archiveFolder.path(), "/skara some-text & more text"));
+            assertTrue(archiveContains(archiveFolder.path(), "/skara Help"));
 
             // The mailing list as well
             listServer.processIncoming();
@@ -358,10 +357,21 @@ class MailingListBridgeBotTests {
             // Add a comment quickly before integration - it should not be combined with the integration message
             pr.addComment("I will now integrate this PR");
 
-            // Mark it as integrated but skip adding the integration comment for now
+            // Add sponsor label and comment
             var ignoredPr = ignored.pullRequest(pr.id());
+            ignoredPr.addLabel("sponsor");
+            ignoredPr.addComment(String.format(PullRequestConstants.READY_FOR_SPONSOR_MARKER, editHash.hex()) +
+                    "@" + author.name() + " Your change (at version " + editHash.abbreviate() + ") is now ready to be sponsored by a Committer.");
+            TestBotRunner.runPeriodicItems(mlBot);
+            Repository.materialize(archiveFolder.path(), archive.authenticatedUrl(), "master");
+            assertTrue(archiveContains(archiveFolder.path(), "is now ready to be sponsored by a Committer."));
+
+            // Mark it as integrated but skip adding the integration comment for now
             ignoredPr.setBody("This has been integrated");
             ignoredPr.addLabel("integrated");
+            ignoredPr.removeLabel("sponsor");
+            ignoredPr.removeLabel("rfr");
+            ignoredPr.removeLabel("ready");
             ignoredPr.setState(Issue.State.CLOSED);
 
             // Run another archive pass
@@ -1127,7 +1137,7 @@ class MailingListBridgeBotTests {
             var reviewFile1 = Path.of("reviewfile.txt");
             var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), reviewFile1);
             var reviewFile2 = Path.of("aardvark_reviewfile.txt");
-            Files.writeString(localRepo.root().resolve(reviewFile2), "1\n2\n3\n4\n5\n6\n", StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(reviewFile2), "1\n2\n3\n4\n5\n6\n");
             localRepo.add(reviewFile2);
             var masterHash = localRepo.commit("Another one", "duke", "duke@openjdk.org");
             localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
@@ -1459,10 +1469,10 @@ class MailingListBridgeBotTests {
             localRepo.push(initialHash, author.authenticatedUrl(), "master");
 
             // Make a change with a corresponding PR
-            var current = Files.readString(localRepo.root().resolve(reviewFile), StandardCharsets.UTF_8);
+            var current = Files.readString(localRepo.root().resolve(reviewFile));
             var updated = current.replaceAll("Line 2", "Line 2 edit\nLine 2.5");
             updated = updated.replaceAll("Line 13", "Line 12.5\nLine 13 edit");
-            Files.writeString(localRepo.root().resolve(reviewFile), updated, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(reviewFile), updated);
             var editHash = CheckableRepository.appendAndCommit(localRepo);
             localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
             var pr = credentials.createPullRequest(archive, "master", "edit", "This is a pull request");
@@ -2655,7 +2665,7 @@ class MailingListBridgeBotTests {
             pr.setBody("This is now ready");
 
             var mlBot = mlBotBuilder.cooldown(cooldown).build();
-            Thread.sleep(cooldown.toMillis());
+            Thread.sleep(cooldown);
             TestBotRunner.runPeriodicItems(mlBot);
             listServer.processIncoming();
 
@@ -2680,7 +2690,7 @@ class MailingListBridgeBotTests {
                 } else {
                     log.info("Didn't do the test in time - retrying (elapsed: " + elapsed + " required: " + cooldown + ")");
                     // Ensure that the cooldown expires
-                    Thread.sleep(cooldown.toMillis());
+                    Thread.sleep(cooldown);
                     // If no mail was received, we have to flush it out
                     if (noMailReceived) {
                         TestBotRunner.runPeriodicItems(mlBot);
@@ -2693,7 +2703,7 @@ class MailingListBridgeBotTests {
             assertTrue(noMailReceived);
 
             // But after the cooldown period has passed, it should
-            Thread.sleep(cooldown.toMillis());
+            Thread.sleep(cooldown);
             TestBotRunner.runPeriodicItems(mlBot);
             listServer.processIncoming();
 
@@ -2919,7 +2929,7 @@ class MailingListBridgeBotTests {
             pr.setBody("This is now ready");
 
             var mlBot = mlBotBuilder.cooldown(cooldown).build();
-            Thread.sleep(cooldown.toMillis());
+            Thread.sleep(cooldown);
             TestBotRunner.runPeriodicItems(mlBot);
             listServer.processIncoming();
 
@@ -2945,7 +2955,7 @@ class MailingListBridgeBotTests {
                 } else {
                     log.info("Didn't do the test in time - retrying (elapsed: " + elapsed + " required: " + cooldown + ")");
                     // Ensure that the cooldown expires
-                    Thread.sleep(cooldown.toMillis());
+                    Thread.sleep(cooldown);
                     // If no mail was received, we have to flush it out
                     if (noMailReceived) {
                         TestBotRunner.runPeriodicItems(mlBot);
@@ -2958,7 +2968,7 @@ class MailingListBridgeBotTests {
             assertTrue(noMailReceived);
 
             // But after the cooldown period has passed, it should
-            Thread.sleep(cooldown.toMillis());
+            Thread.sleep(cooldown);
             TestBotRunner.runPeriodicItems(mlBot);
             listServer.processIncoming();
 
@@ -3983,6 +3993,102 @@ class MailingListBridgeBotTests {
             assertEquals("val2", mail.headerValue("Extra2"));
             // The first mail should contain full pr body
             assertTrue(mail.body().contains(pr.store().body()));
+        }
+    }
+
+    @Test
+    void largeDiffArchive(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory();
+             var archiveFolder = new TemporaryDirectory();
+             var webrevFolder = new TemporaryDirectory();
+             var listServer = new TestMailmanServer();
+             var webrevServer = new TestWebrevServer()) {
+            var author = credentials.getHostedRepository();
+            var archive = credentials.getHostedRepository();
+            var ignored = credentials.getHostedRepository();
+            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id());
+            var from = EmailAddress.from("test", "test@test.mail");
+            var mlBot = MailingListBridgeBot.newBuilder()
+                    .from(from)
+                    .repo(author)
+                    .archive(archive)
+                    .censusRepo(censusBuilder.build())
+                    .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
+                    .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
+                    .ignoredComments(Set.of())
+                    .listArchive(listServer.getArchive())
+                    .smtpServer(listServer.getSMTP())
+                    .webrevStorageHTMLRepository(archive)
+                    .webrevStorageRef("webrev")
+                    .webrevStorageBase(Path.of("test"))
+                    .webrevStorageBaseUri(webrevServer.uri())
+                    .readyLabels(Set.of("rfr"))
+                    .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
+                    .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                    .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
+                    .sendInterval(Duration.ZERO)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+            localRepo.push(masterHash, archive.authenticatedUrl(), "webrev", true);
+
+            // Make a very big change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "A simple change\n".repeat(300001),
+                    "Change msg\n\nWith several lines");
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(archive, "master", "edit", "1234: This is a pull request");
+            pr.setBody("This should not be ready");
+
+            // Flag it as ready for review
+            pr.setBody("This should now be ready");
+            pr.addLabel("rfr");
+
+            // Post a ready comment
+            var ignoredPr = ignored.pullRequest(pr.id());
+            ignoredPr.addComment("ready");
+
+            // Run an archive pass
+            TestBotRunner.runPeriodicItems(mlBot);
+
+            // The archive should now contain an entry
+            Repository.materialize(archiveFolder.path(), archive.authenticatedUrl(), "master");
+            assertTrue(archiveContains(archiveFolder.path(), "Webrev: Webrev is not available because diff is too large"));
+
+            assertTrue(pr.store().comments().get(1).body().contains("[Full](Webrev is not available because diff is too large)"));
+            // The mailing list as well
+            listServer.processIncoming();
+            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
+            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var conversations = mailmanList.conversations(Duration.ofDays(1));
+            assertEquals(1, conversations.size());
+            var mail = conversations.get(0).first();
+            assertTrue(mail.body().contains("Webrev: Webrev is not available because diff is too large"));
+
+            // And there shouldn't be a webrev
+            Repository.materialize(webrevFolder.path(), archive.authenticatedUrl(), "webrev");
+            assertFalse(Files.exists(webrevFolder.path().resolve("test")));
+
+            // Make a small change
+            editHash = CheckableRepository.appendAndCommit(localRepo, "A simple change 2",
+                    "Change msg\n\nWith several lines");
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+
+            TestBotRunner.runPeriodicItems(mlBot);
+            assertTrue(pr.store().comments().get(1).body().contains("webrevs/test/1/00-01)"));
+            listServer.processIncoming();
+            conversations = mailmanList.conversations(Duration.ofDays(1));
+            mail = conversations.get(0).allMessages().get(1);
+            assertTrue(mail.body().contains("webrevs/test/1/00-01"));
+
+            // And there should be a webrev
+            Repository.materialize(webrevFolder.path(), archive.authenticatedUrl(), "webrev");
+            assertTrue(webrevContains(webrevFolder.path(), "1 lines changed"));
         }
     }
 }

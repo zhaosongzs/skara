@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,6 +41,14 @@ public class JCheck {
     private final CommitMessageParser parser;
     private final String revisionRange;
     private final List<CommitCheck> commitChecks;
+    private final static List<CommitCheck> commitChecksForStagedOrWorkingTree = List.of(
+            new AuthorCheck(),
+            new CommitterCheck(),
+            new WhitespaceCheck(),
+            new ExecutableCheck(),
+            new SymlinkCheck(),
+            new BinaryCheck()
+    );
     private final List<RepositoryCheck> repositoryChecks;
     private final List<String> additionalConfiguration;
     private final JCheckConfiguration overridingConfiguration;
@@ -81,7 +89,9 @@ public class JCheck {
             new ExecutableCheck(),
             new SymlinkCheck(),
             new BinaryCheck(),
-            new ProblemListsCheck(repository)
+            new ProblemListsCheck(repository),
+            new IssuesTitleCheck(),
+            new CopyrightFormatCheck(repository)
         );
         repositoryChecks = List.of(
             new BranchesCheck(allowedBranches),
@@ -137,7 +147,8 @@ public class JCheck {
         }
         var finalCensus = census;
         var message = parser.parse(commit);
-        var enabled = conf.checks().enabled(commitChecks);
+        var availableChecks = (revisionRange.equals(STAGED_REV) || revisionRange.equals(WORKING_TREE_REV)) ? commitChecksForStagedOrWorkingTree : commitChecks;
+        var enabled = conf.checks().enabled(availableChecks);
         var iterator = new MapIterator<>(enabled.iterator(), c -> {
             log.finer("Running commit check '" + c.name() + "' for " + commit.hash().hex());
             return c.check(commit, message, conf, finalCensus);
@@ -156,6 +167,9 @@ public class JCheck {
     }
 
     private Set<Check> checksForRange() throws IOException {
+        if (overridingConfiguration != null) {
+            return new HashSet<>(overridingConfiguration.checks().enabled(commitChecks));
+        }
         try (var commits = repository.commits(revisionRange)) {
             return commits.stream()
                           .flatMap(commit -> checksForCommit(commit).stream())
@@ -294,5 +308,23 @@ public class JCheck {
                                 null,
                                 null);
         return jcheck.checksForRange();
+    }
+
+    public static Set<Check> checksFor(ReadOnlyRepository repository, JCheckConfiguration conf) throws IOException {
+        var jcheck = new JCheck(repository,
+                                CommitMessageParsers.v1,
+                                null,
+                                Pattern.compile(".*"),
+                                Pattern.compile(".*"),
+                                List.of(),
+                                conf,
+                                null);
+        return jcheck.checksForRange();
+    }
+
+    public static List<String> commitCheckNamesForStagedOrWorkingTree() {
+        return commitChecksForStagedOrWorkingTree.stream()
+                .map(Check::name)
+                .toList();
     }
 }

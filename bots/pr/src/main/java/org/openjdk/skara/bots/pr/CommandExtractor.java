@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,8 @@
 package org.openjdk.skara.bots.pr;
 
 import java.time.ZonedDateTime;
+
+import org.openjdk.skara.bots.common.BotUtils;
 import org.openjdk.skara.forge.HostedCommit;
 import org.openjdk.skara.forge.PullRequest;
 import org.openjdk.skara.issuetracker.Comment;
@@ -62,7 +64,13 @@ public class CommandExtractor {
             Map.entry(clean.name(), new CleanCommand()),
             Map.entry(open.name(), new OpenCommand()),
             Map.entry(backport.name(), new BackportCommand()),
-            Map.entry(tag.name(), new TagCommand())
+            Map.entry(tag.name(), new TagCommand()),
+            Map.entry(branch.name(), new BranchCommand()),
+            Map.entry(approval.name(), new ApprovalCommand()),
+            Map.entry(approve.name(), new ApproveCommand()),
+            Map.entry(author.name(), new AuthorCommand()),
+            Map.entry(keepalive.name(), new TouchCommand()),
+            Map.entry(touch.name(), new TouchCommand())
     );
 
     static class HelpCommand implements CommandHandler {
@@ -113,6 +121,7 @@ public class CommandExtractor {
         String multiLineCommand = null;
         int subId = 0;
         for (var line : text.split("\\R")) {
+            line = BotUtils.preprocessCommandLine(line);
             var commandMatcher = EXECUTION_COMMAND_PATTERN.getPattern().matcher(line);
             if (commandMatcher.matches()) {
                 if (multiLineHandler != null) {

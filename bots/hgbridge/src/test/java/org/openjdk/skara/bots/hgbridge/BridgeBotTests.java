@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,6 @@ import org.junit.jupiter.api.*;
 
 import java.io.*;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -76,7 +75,7 @@ class BridgeBotTests {
 
             var initialFile = marksLocalRepo.root().resolve("init.txt");
             if (!Files.exists(initialFile)) {
-                Files.writeString(initialFile, "Hello", StandardCharsets.UTF_8);
+                Files.writeString(initialFile, "Hello");
                 marksLocalRepo.add(initialFile);
                 var hash = marksLocalRepo.commit("First", "duke", "duke@duke.duke");
                 marksLocalRepo.checkout(hash, true); // Have to move away from the master branch to allow pushes
@@ -142,7 +141,7 @@ class BridgeBotTests {
             runHgCommand(localRepo, "update", "null");
             runHgCommand(localRepo, "branch", "testlock");
             var lockFile = localRepo.root().resolve("lock.txt");
-            Files.writeString(lockFile, ZonedDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME), StandardCharsets.UTF_8);
+            Files.writeString(lockFile, ZonedDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME));
             localRepo.add(lockFile);
             localRepo.commit("Lock", "duke", "Duke <duke@openjdk.org>");
         } catch (IOException e) {
@@ -166,7 +165,7 @@ class BridgeBotTests {
              var marksFolder = new TemporaryDirectory()) {
             // Export a partial version of a hg repository
             var localHgRepo = Repository.materialize(hgFolder.path(), source, "default");
-            localHgRepo.fetch(source, "testlock");
+            localHgRepo.fetch(source, "testlock").orElseThrow();
             var destinationRepo = credentials.getHostedRepository();
             var config = new TestExporterConfig(localHgRepo.root().toUri(), destinationRepo, marksFolder.path());
             var bridge = new JBridgeBot(config, storageFolder.path());
@@ -183,7 +182,7 @@ class BridgeBotTests {
             assertFalse(localGitTags.contains("jtreg4.1-b05"));
 
             // Import more revisions into the local hg repository and export again
-            localHgRepo.fetch(source, "default");
+            localHgRepo.fetch(source, "default").orElseThrow();
             TestBotRunner.runPeriodicItems(bridge);
 
             // There should now be more tags present
@@ -227,16 +226,17 @@ class BridgeBotTests {
             assertTrue(localGitCommits.contains(FIRST_CONVERTED_HASH));
 
             // Now corrupt the .hg folder in the permanent storage
-            Files.walk(storageFolder.path())
-                 .filter(p -> p.toString().contains("/.hg/"))
-                 .filter(p -> p.toFile().isFile())
-                 .forEach(p -> {
-                     try {
-                         Files.delete(p);
-                     } catch (IOException e) {
-                         throw new UncheckedIOException(e);
-                     }
-                 });
+            try (var paths = Files.walk(storageFolder.path())) {
+                paths.filter(p -> p.toString().contains("/.hg/"))
+                     .filter(p -> p.toFile().isFile())
+                     .forEach(p -> {
+                         try {
+                             Files.delete(p);
+                         } catch (IOException e) {
+                             throw new UncheckedIOException(e);
+                         }
+                     });
+            }
 
             // Now export it again - should still be intact
             TestBotRunner.runPeriodicItems(bridge);
@@ -354,16 +354,17 @@ class BridgeBotTests {
             assertFalse(localGitCommits.contains(FIRST_CONVERTED_HASH));
 
             // Remove the successful push markers
-            Files.walk(storageFolder.path())
-                 .filter(p -> p.toString().contains(".success.txt"))
-                 .filter(p -> p.toFile().isFile())
-                 .forEach(p -> {
-                     try {
-                         Files.delete(p);
-                     } catch (IOException e) {
-                         throw new UncheckedIOException(e);
-                     }
-                 });
+            try (var paths = Files.walk(storageFolder.path())) {
+                paths.filter(p -> p.toString().contains(".success.txt"))
+                     .filter(p -> p.toFile().isFile())
+                     .forEach(p -> {
+                         try {
+                             Files.delete(p);
+                         } catch (IOException e) {
+                             throw new UncheckedIOException(e);
+                         }
+                     });
+            }
 
             // Now run the exporter again - it should do the push again
             TestBotRunner.runPeriodicItems(bridge);
@@ -383,7 +384,7 @@ class BridgeBotTests {
              var marksFolder = new TemporaryDirectory()) {
             // Export a hg repository with unreachable commits
             var localHgRepo = Repository.materialize(hgFolder.path(), source, "default");
-            localHgRepo.fetch(source, "testlock");
+            localHgRepo.fetch(source, "testlock").orElseThrow();
             var destinationRepo = credentials.getHostedRepository();
             var config = new TestExporterConfig(localHgRepo.root().toUri(), destinationRepo, marksFolder.path());
             var bridge = new JBridgeBot(config, storageFolder.path());
@@ -412,7 +413,7 @@ class BridgeBotTests {
              var marksFolder = new TemporaryDirectory()) {
             // Export a hg repository
             var localHgRepo = Repository.materialize(hgFolder.path(), source, "default");
-            localHgRepo.fetch(source, "testlock");
+            localHgRepo.fetch(source, "testlock").orElseThrow();
             var destinationRepo = credentials.getHostedRepository();
             var config = new TestExporterConfig(localHgRepo.root().toUri(), destinationRepo, marksFolder.path());
             var bridge = new JBridgeBot(config, storageFolder.path());

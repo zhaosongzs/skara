@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -107,7 +107,7 @@ public class GitLabRepository implements HostedRepository {
                                          String title,
                                          List<String> body,
                                          boolean draft) {
-        if (!(target instanceof GitLabRepository)) {
+        if (!(target instanceof GitLabRepository targetRepo)) {
             throw new IllegalArgumentException("target must be a GitLab repository");
         }
 
@@ -119,7 +119,6 @@ public class GitLabRepository implements HostedRepository {
                         .body("target_project_id", Long.toString(target.id()))
                         .execute();
 
-        var targetRepo = (GitLabRepository) target;
         return new GitLabMergeRequest(targetRepo, gitLabHost, pr, targetRepo.request);
     }
 
@@ -235,6 +234,11 @@ public class GitLabRepository implements HostedRepository {
     }
 
     @Override
+    public String group() {
+        return projectName.split("/")[0];
+    }
+
+    @Override
     public URI authenticatedUrl() {
         if (gitLabHost.useSsh()) {
             return URI.create("ssh://git@" + gitLabHost.getPat().orElseThrow().username() + "." + gitLabHost.getUri().getHost() + "/" + projectName + ".git");
@@ -302,6 +306,8 @@ public class GitLabRepository implements HostedRepository {
                 .onError(response -> {
                     // Retry once with additional escaping of the path fragment
                     // Only retry when the error is exactly "File Not Found"
+                    // For GitLab, if ref not found, it returns "404 Commit Not Found",
+                    // if file not found, it returns "404 File Not Found"
                     if (response.statusCode() == 404 && JSON.parse(response.body()).get("message").asString().endsWith("File Not Found")) {
                         log.warning("First time request returned bad status: " + response.statusCode());
                         log.info("First time response body: " + response.body());
@@ -323,7 +329,7 @@ public class GitLabRepository implements HostedRepository {
     }
 
     @Override
-    public void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail) {
+    public void writeFileContents(String filename, String content, Branch branch, String message, String authorName, String authorEmail, boolean createNewFile) {
         var encodedFileName = URLEncoder.encode(filename, StandardCharsets.UTF_8);
         var body = JSON.object()
                 .put("commit_message", message)
@@ -332,19 +338,37 @@ public class GitLabRepository implements HostedRepository {
                 .put("author_email", authorEmail)
                 .put("encoding", "base64")
                 .put("content", new String(Base64.getEncoder().encode(content.getBytes(StandardCharsets.UTF_8)), StandardCharsets.UTF_8));
-        request.put("repository/files/" + encodedFileName)
-                .body(body)
-                .onError(response -> {
-                    // Gitlab requires POST for creating new files and PUT for updating existing.
-                    // Retry with POST if we get 400 response.
-                    if (response.statusCode() == 400) {
-                        return Optional.of(request.post("repository/files/" + encodedFileName)
-                                .body(body)
-                                .execute());
-                    }
-                    return Optional.empty();
-                })
-                .execute();
+
+        RestRequest.ErrorTransform onError = response -> {
+            // When GitLab returns 400, it may have still performed the update, so
+            // need to check the current file contents.
+            if (response.statusCode() == 400) {
+                log.info("Received status code 400 when writing file " + filename
+                        + " in repo " + name() + ", checking if file was stored anyway");
+                var currentContents = fileContents(filename, branch.name());
+                if (currentContents.isPresent() && content.equals(currentContents.get())) {
+                    // Need to return something other than empty
+                    log.info("Writing file " + filename + " in repo " + name()
+                            + " was found to be successful in spite of return code 400");
+                    return Optional.of(JSON.of());
+                }
+            }
+            return Optional.empty();
+        };
+
+        if (createNewFile) {
+            // Use POST to create a new file
+            request.post("repository/files/" + encodedFileName)
+                    .body(body)
+                    .onError(onError)
+                    .execute();
+        } else {
+            // USE PUT to update the file
+            request.put("repository/files/" + encodedFileName)
+                    .body(body)
+                    .onError(onError)
+                    .execute();
+        }
     }
 
     @Override
@@ -401,7 +425,7 @@ public class GitLabRepository implements HostedRepository {
         var forkedRepoName = namespace + "/" + nameOnly;
         while (!gitLabHost.isProjectForkComplete(forkedRepoName)) {
             try {
-                Thread.sleep(Duration.ofSeconds(1).toMillis());
+                Thread.sleep(Duration.ofSeconds(1));
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -435,6 +459,11 @@ public class GitLabRepository implements HostedRepository {
     }
 
     @Override
+    public String defaultBranchName() {
+        return json.get("default_branch").asString();
+    }
+
+    @Override
     public void protectBranchPattern(String pattern) {
         var body = JSON.object()
                 .put("name", pattern)
@@ -465,35 +494,62 @@ public class GitLabRepository implements HostedRepository {
                 .execute();
     }
 
+    // Handles results from both comments and discussions API
     private CommitComment toCommitComment(Hash hash, JSONValue o) {
-       var line = o.get("line").isNull()? -1 : o.get("line").asInt();
-       var path = o.get("path").isNull()? null : Path.of(o.get("path").asString());
-       // GitLab does not offer updated_at for commit comments
-       var createdAt = ZonedDateTime.parse(o.get("created_at").asString());
-       // GitLab does not offer an id for commit comments
-       var body = o.get("note").asString();
-       var user = gitLabHost.parseAuthorField(o);
-       var id = Integer.toString((hash.hex() + createdAt.toString() + user.id()).hashCode());
-       return new CommitComment(hash,
-                                path,
-                                line,
-                                id,
-                                body,
-                                gitLabHost.parseAuthorField(o),
-                                createdAt,
-                                createdAt);
+        if (o.contains("note")) {
+            var line = o.get("line").isNull() ? -1 : o.get("line").asInt();
+            var path = o.get("path").isNull() ? null : Path.of(o.get("path").asString());
+            // GitLab does not offer updated_at for commit comments
+            var createdAt = ZonedDateTime.parse(o.get("created_at").asString());
+            var body = o.get("note").asString();
+            return new CommitComment(hash,
+                    path,
+                    line,
+                    null, // The comments API does not return an ID
+                    body,
+                    gitLabHost.parseAuthorField(o),
+                    createdAt,
+                    createdAt);
+
+        } else if (o.contains("notes")) {
+            var note = o.get("notes").asArray().get(0);
+            var line = -1;
+            Path path = null;
+            if (note.contains("position")) {
+                var position = note.get("position");
+                if (!position.get("new_line").isNull()) {
+                    line = position.get("new_line").asInt();
+                    path = Path.of(position.get("new_path").asString());
+                } else if (!position.get("old_line").isNull()) {
+                    line = position.get("old_line").asInt();
+                    path = Path.of(position.get("old_path").asString());
+                }
+            }
+            return new CommitComment(hash,
+                    path,
+                    line,
+                    note.get("id").toString(),
+                    note.get("body").asString(),
+                    gitLabHost.parseAuthorField(note),
+                    ZonedDateTime.parse(note.get("created_at").asString()),
+                    ZonedDateTime.parse(note.get("updated_at").asString()));
+
+        } else {
+            throw new RuntimeException("Object contains neither 'note' or 'notes', cannot parse commit comment");
+        }
     }
 
     @Override
     public List<CommitComment> commitComments(Hash hash) {
-        return request.get("repository/commits/" + hash.hex() + "/comments")
+        // Using the discussions API gives us more information, most notably the ID field
+        return request.get("repository/commits/" + hash.hex() + "/discussions")
                       .execute()
                       .stream()
                       .map(o -> toCommitComment(hash, o))
                       .collect(Collectors.toList());
     }
 
-    private Set<Hash> commitsWithTitle(String commitTitle, Map<String, Set<Hash>> commitTitlesToHashes) {
+    private Set<Hash> commitsWithTitle(String commitTitle, Map<String, SequencedSet<Hash>> commitTitlesToHashes) {
         if (commitTitlesToHashes.containsKey(commitTitle)) {
             return commitTitlesToHashes.get(commitTitle);
         }
@@ -512,26 +568,22 @@ public class GitLabRepository implements HostedRepository {
         return Set.of();
     }
 
-    private Hash commitWithComment(String commitTitle,
-                                   ZonedDateTime commentCreatedAt,
-                                   HostUser author,
-                                   Map<String, Set<Hash>> commitTitleToCommits) {
+    private Optional<CommitComment> findComment(String commitTitle,
+            String commentId,
+            Map<String, SequencedSet<Hash>> commitTitleToCommits) {
         var candidates = commitsWithTitle(commitTitle, commitTitleToCommits);
-        if (candidates.size() == 1) {
-            return candidates.iterator().next();
+        // Even if there is only one candidate, we need to make sure the comment
+        // exists on that commit before we try to process it. If this fails it's
+        // most likely due to inconsistent data from GitLab, which should
+        // eventually clear up on subsequent tries.
+        Optional<CommitComment> found = candidates.stream()
+                .flatMap(candidate -> commitComments(candidate).stream())
+                .filter(comment -> comment.id().equals(commentId))
+                .findFirst();
+        if (found.isEmpty()) {
+            log.warning("Did not find commit with title " + commitTitle + " for repository " + projectName);
         }
-
-        for (var candidate : candidates) {
-            var comments = commitComments(candidate);
-            for (var comment : comments) {
-                if (comment.createdAt().equals(commentCreatedAt) &&
-                    comment.author().equals(author)) {
-                    return candidate;
-                }
-            }
-        }
-
-        throw new RuntimeException("Did not find commit with title " + commitTitle + " for repository " + projectName);
+        return found;
     }
 
     /**
@@ -548,19 +600,19 @@ public class GitLabRepository implements HostedRepository {
 
         var formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         var notes = request.get("events")
-                      .param("after", updatedAfter.format(formatter))
-                      .execute()
-                      .stream()
-                      .filter(o -> o.contains("note") &&
-                                   o.get("note").contains("noteable_type") &&
-                                   o.get("note").get("noteable_type").asString().equals("Commit"))
-                      .filter(o -> o.contains("target_type") &&
-                                   !o.get("target_type").isNull() &&
-                                   o.get("target_type").asString().equals("Note"))
-                      .filter(o -> o.contains("author") &&
-                                   o.get("author").contains("id") &&
-                                   !excludeAuthors.contains(o.get("author").get("id").asInt()))
-                      .toList();
+                .param("after", updatedAfter.format(formatter))
+                .execute()
+                .stream()
+                .filter(o -> o.contains("note") &&
+                        o.get("note").contains("noteable_type") &&
+                        o.get("note").get("noteable_type").asString().equals("Commit"))
+                .filter(o -> o.contains("target_type") &&
+                        !o.get("target_type").isNull() &&
+                        o.get("target_type").asString().equals("Note"))
+                .filter(o -> o.contains("author") &&
+                        o.get("author").contains("id") &&
+                        !excludeAuthors.contains(o.get("author").get("id").asInt()))
+                .toList();
 
         if (notes.isEmpty()) {
             return List.of();
@@ -569,60 +621,77 @@ public class GitLabRepository implements HostedRepository {
         var commitTitleToCommits = getCommitTitleToCommitsMap(localRepo, branches);
 
         return notes.stream()
-                    .map(o -> {
-                        var createdAt = ZonedDateTime.parse(o.get("note").get("created_at").asString());
-                        var body = o.get("note").get("body").asString();
-                        var user = gitLabHost.parseAuthorField(o);
-                        var id = o.get("note").get("id").asInt();
-                        var hash = commitWithComment(o.get("target_title").asString(),
-                                                     createdAt,
-                                                     user,
-                                                     commitTitleToCommits);
-                        return new CommitComment(hash, null, -1, String.valueOf(id), body, user, createdAt, createdAt);
-                    })
-                    .toList();
+                .map(o -> findComment(o.get("target_title").asString(),
+                        o.get("note").get("id").toString(), commitTitleToCommits))
+                .flatMap(Optional::stream)
+                .toList();
     }
 
     /**
-     * Lazy fetching and caching of the commitTitleToCommits map. The first time
-     * this is called, the full map is built from the local repository. After that
-     * it's just refreshed from the server.
+     * Lazy fetching and caching of the commitTitleToCommits map. The map is only
+     * cached for one set of branches. If called with a different set, the old
+     * cache is invalidated and a new is rebuilt from scratch. In practice, an
+     * instance of this class is only ever called with the same set of branches.
+     * If that was to change we will need to rethink this.
+     * <p>
+     * The full map is built from the local repository. For incremental updates,
+     * it's refreshed until it contains the same number of commits as the local
+     * repository. The topo-order should guarantee that this gives us the same
+     * set of commits.
      */
-    private final Map<String, Set<Hash>> commitTitleToCommits = new HashMap<>();
-    private boolean commitTitleToCommitsInitialized = false;
-    private ZonedDateTime lastCommitTime = ZonedDateTime.ofInstant(Instant.EPOCH, ZoneId.systemDefault());
-    private Map<String, Set<Hash>> getCommitTitleToCommitsMap(ReadOnlyRepository localRepo, List<Branch> branches) {
-        if (!commitTitleToCommitsInitialized) {
-            try {
+    private final Map<String, SequencedSet<Hash>> commitTitleToCommits = new HashMap<>();
+    private Set<Branch> commitMapBranchSet;
+    private int commitMapCount = 0;
+
+    private Map<String, SequencedSet<Hash>> getCommitTitleToCommitsMap(ReadOnlyRepository localRepo, List<Branch> branches) {
+        try {
+            Set<Branch> branchSet = Set.copyOf(branches);
+            if (!branchSet.equals(commitMapBranchSet)) {
+                log.info("Invalidating commitTitleToCommits map for branch set: " + branchSet + " old set: " + commitMapBranchSet);
+                commitTitleToCommits.clear();
+                commitMapCount = 0;
+                commitMapBranchSet = branchSet;
+            }
+            int newSize = localRepo.commitCount(branches);
+            if (newSize > commitMapCount) {
+                int sizeBefore = commitMapCount;
+                log.info("Adding " + (newSize - sizeBefore) + " new commit(s) to commitTitleToCommits map");
                 for (var commit : localRepo.commitMetadataFor(branches)) {
                     var title = commit.message().stream().findFirst().orElse("");
-                    commitTitleToCommits.computeIfAbsent(title, t -> new LinkedHashSet<>()).add(commit.hash());
-                    if (lastCommitTime.isBefore(commit.authored())) {
-                        lastCommitTime = commit.authored();
+                    SequencedSet<Hash> hashes = commitTitleToCommits.computeIfAbsent(title, t -> new LinkedHashSet<>());
+                    if (!hashes.contains(commit.hash())) {
+                        // We want to keep newer commits at the front for quicker lookup.
+                        // Commits are iterated from newer to older so add last for the
+                        // initial run. When updating, there will generally just be a small
+                        // set of new commits in each run, so add them to the front.
+                        if (sizeBefore == 0) {
+                            hashes.add(commit.hash());
+                        } else {
+                            hashes.addFirst(commit.hash());
+                        }
+                        commitMapCount++;
+                        // Only log each addition after the initial complete build is done
+                        if (sizeBefore > 0) {
+                            log.fine("Adding " + commit.hash() + " to commitTitleToCommits map");
+                        }
+                    }
+                    if (commitMapCount >= newSize) {
+                        break;
                     }
                 }
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
+            } else {
+                log.fine("No commits added to commitTitleToCommits map");
             }
-            commitTitleToCommitsInitialized = true;
-        }
-        // Fetch eventual new commits
-        var commits = request.get("repository/commits")
-                .param("since", lastCommitTime.format(DateTimeFormatter.ISO_DATE_TIME))
-                .execute()
-                .asArray();
-        for (var commit : commits) {
-            var hash = new Hash(commit.get("id").asString());
-            var title = commit.get("title").asString();
-            commitTitleToCommits.computeIfAbsent(title, t -> new LinkedHashSet<>()).add(hash);
-            var authored = ZonedDateTime.parse(commit.get("authored_date").asString());
-            if (lastCommitTime.isBefore(authored)) {
-                lastCommitTime = authored;
-            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
         return commitTitleToCommits;
     }
 
+    /**
+     * The CommitComment returned from this method will not have an ID field,
+     * this is due to a limitation in the GitLab API.
+     */
     @Override
     public CommitComment addCommitComment(Hash hash, String body) {
         var query = JSON.object().put("note", body);
@@ -653,7 +722,7 @@ public class GitLabRepository implements HostedRepository {
         return new CommitMetadata(hash, parents, author, authored, committer, committed, message);
     }
 
-    Diff toDiff(Hash from, Hash to, JSONValue o) {
+    Diff toDiff(Hash from, Hash to, JSONValue o, boolean complete) {
         var patches = new ArrayList<Patch>();
 
         for (var file : o.asArray()) {
@@ -695,7 +764,7 @@ public class GitLabRepository implements HostedRepository {
                                          status, hunks));
         }
 
-        return new Diff(from, to, patches);
+        return new Diff(from, to, patches, complete);
     }
 
     @Override
@@ -715,7 +784,11 @@ public class GitLabRepository implements HostedRepository {
                     .onError(r -> Optional.of(JSON.of()))
                     .execute();
             if (!diff.isNull()) {
-                diffs = List.of(toDiff(metadata.parents().get(0), hash, diff));
+                // The diff here is limited by diff patch, diff files count, diff lines.
+                // There is no feasible way to know if this diff is complete.
+                // The diff here is only used to evaluate if a backport PR is clean or not,
+                // assuming the diff is complete will not introduce any side effect.
+                diffs = List.of(toDiff(metadata.parents().get(0), hash, diff, true));
             }
         }
         return Optional.of(new HostedCommit(metadata, diffs, url));
@@ -760,12 +833,27 @@ public class GitLabRepository implements HostedRepository {
     }
 
     @Override
+    public List<Collaborator> collaborators() {
+        var result = request.get("members").execute();
+        return result.stream()
+                .map(o -> new Collaborator(gitLabHost.parseAuthorObject(o.asObject()), o.get("access_level").asInt() >= 30))
+                .toList();
+    }
+
+    @Override
     public void addCollaborator(HostUser user, boolean canPush) {
         var accessLevel = canPush ? "30" : "20";
         request.post("members")
                .body("user_id", user.id())
                .body("access_level", accessLevel)
                .execute();
+    }
+
+    @Override
+    public void removeCollaborator(HostUser user) {
+        request.delete("members/" + user.id())
+                .header("Content-Type", "application/json")
+                .execute();
     }
 
     @Override

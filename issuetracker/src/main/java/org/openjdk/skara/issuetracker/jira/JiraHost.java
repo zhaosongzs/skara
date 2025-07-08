@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,10 +33,58 @@ import java.net.URI;
 import java.util.*;
 
 public class JiraHost implements IssueTracker {
+    private static class BackportEndpoint implements CustomEndpoint, CustomEndpointRequest {
+        private final RestRequest request;
+
+        private RestRequest.QueryBuilder query;
+        private JSONValue body;
+
+        private BackportEndpoint(RestRequest request) {
+            this.request = request;
+        }
+
+        @Override
+        public CustomEndpointRequest post() {
+            query = request.post();
+            return this;
+        }
+
+        @Override
+        public CustomEndpointRequest body(JSONValue body) {
+            this.body = body;
+            return this;
+        }
+
+        @Override
+        public CustomEndpointRequest header(String value, String name) {
+            query = query.header(value, name);
+            return this;
+        }
+
+        @Override
+        public CustomEndpointRequest onError(RestRequest.ErrorTransform transform) {
+            query = query.onError(transform);
+            return this;
+        }
+
+        @Override
+        public JSONValue execute() {
+            if (body == null || !body.contains("parentIssueKey")) {
+                throw new IllegalStateException("Body must be a JSON object with at least the field 'parentIssueKey' set");
+            }
+
+            return query.body(body).execute();
+        }
+    }
+
+    private static final String REST_API_ENDPOINT_PATH = "/rest/api/2/";
+    private static final String BACKPORT_ENDPOINT_PATH = "/rest/jbs/1.0/backport/";
+
     private final URI uri;
     private final String visibilityRole;
-    private final String securityLevel;
     private final RestRequest request;
+    private final RestRequest backportRequest;
+    private final Map<String, IssueProject> issueProjects = new HashMap<>();
 
     private HostUser currentUser;
     private ZoneId timeZone;
@@ -44,12 +92,16 @@ public class JiraHost implements IssueTracker {
     JiraHost(URI uri) {
         this.uri = uri;
         this.visibilityRole = null;
-        this.securityLevel = null;
 
         var baseApi = URIBuilder.base(uri)
-                                .appendPath("/rest/api/2/")
+                                .appendPath(REST_API_ENDPOINT_PATH)
                                 .build();
-        request = new RestRequest(baseApi);
+        this.request = new RestRequest(baseApi);
+
+        var backportUri = URIBuilder.base(uri)
+                                    .appendPath(BACKPORT_ENDPOINT_PATH)
+                                    .build();
+        this.backportRequest = new RestRequest(backportUri);
     }
 
     /**
@@ -58,32 +110,35 @@ public class JiraHost implements IssueTracker {
     JiraHost(URI uri, String header, String value) {
         this.uri = uri;
         this.visibilityRole = null;
-        this.securityLevel = null;
 
         var baseApi = URIBuilder.base(uri)
-                                .appendPath("/rest/api/2/")
+                                .appendPath(REST_API_ENDPOINT_PATH)
                                 .build();
-        request = new RestRequest(baseApi, "test", (r) -> Arrays.asList(header, value));
+        this.request = new RestRequest(baseApi, "test", (r) -> Arrays.asList(header, value));
+
+        var backportUri = URIBuilder.base(uri)
+                                    .appendPath(BACKPORT_ENDPOINT_PATH)
+                                    .build();
+        this.backportRequest = new RestRequest(backportUri, "test", (r) -> Arrays.asList(header, value));
     }
 
     JiraHost(URI uri, JiraVault jiraVault) {
-        this.uri = uri;
-        this.visibilityRole = null;
-        this.securityLevel = null;
-        var baseApi = URIBuilder.base(uri)
-                                .appendPath("/rest/api/2/")
-                                .build();
-        request = new RestRequest(baseApi, jiraVault.authId(), (r) -> Arrays.asList("Cookie", jiraVault.getCookie()));
+        this(uri, jiraVault, null);
     }
 
-    JiraHost(URI uri, JiraVault jiraVault, String visibilityRole, String securityLevel) {
+    JiraHost(URI uri, JiraVault jiraVault, String visibilityRole) {
         this.uri = uri;
         this.visibilityRole = visibilityRole;
-        this.securityLevel = securityLevel;
+
         var baseApi = URIBuilder.base(uri)
-                                .appendPath("/rest/api/2/")
+                                .appendPath(REST_API_ENDPOINT_PATH)
                                 .build();
-        request = new RestRequest(baseApi, jiraVault.authId(), (r) -> Arrays.asList("Cookie", jiraVault.getCookie()));
+        this.request = new RestRequest(baseApi, jiraVault.authId(), (r) -> Arrays.asList("Cookie", jiraVault.getCookie()));
+
+        var backportUri = URIBuilder.base(uri)
+                                    .appendPath(BACKPORT_ENDPOINT_PATH)
+                                    .build();
+        this.backportRequest = new RestRequest(backportUri, jiraVault.authId(), (r) -> Arrays.asList("Cookie", jiraVault.getCookie()));
     }
 
     @Override
@@ -91,12 +146,17 @@ public class JiraHost implements IssueTracker {
         return uri;
     }
 
-    Optional<String> visibilityRole() {
-        return Optional.ofNullable(visibilityRole);
+    @Override
+    public Optional<CustomEndpoint> lookupCustomEndpoint(String path) {
+        var endpoint = switch (path) {
+            case BACKPORT_ENDPOINT_PATH -> new BackportEndpoint(backportRequest);
+            default -> null;
+        };
+        return Optional.ofNullable(endpoint);
     }
 
-    Optional<String> securityLevel() {
-        return Optional.ofNullable(securityLevel);
+    Optional<String> visibilityRole() {
+        return Optional.ofNullable(visibilityRole);
     }
 
     @Override
@@ -109,22 +169,23 @@ public class JiraHost implements IssueTracker {
 
     @Override
     public IssueProject project(String name) {
-        return new JiraProject(this, request, name);
+        return issueProjects.computeIfAbsent(name, n -> new JiraProject(this, request, n));
     }
 
     @Override
     public Optional<HostUser> user(String username) {
         var data = request.get("user")
                           .param("username", username)
-                          .onError(r -> Optional.of(JSON.of()))
+                          .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.of()) : Optional.empty())
                           .execute();
         if (data.isNull()) {
             return Optional.empty();
         }
 
         var user = HostUser.create(data.get("name").asString(),
-                                   data.get("name").asString(),
-                                   data.get("displayName").asString());
+                data.get("name").asString(),
+                data.get("displayName").asString(),
+                data.get("active").asBoolean());
         return Optional.of(user);
     }
 
@@ -133,11 +194,12 @@ public class JiraHost implements IssueTracker {
         if (currentUser == null) {
             var data = request.get("myself").execute();
             currentUser = HostUser.builder()
-                                  .id(data.get("name").asString())
-                                  .username(data.get("name").asString())
-                                  .fullName(data.get("displayName").asString())
-                                  .email(data.get("emailAddress").asString())
-                                  .build();
+                    .id(data.get("name").asString())
+                    .username(data.get("name").asString())
+                    .fullName(data.get("displayName").asString())
+                    .active(data.get("active").asBoolean())
+                    .email(data.get("emailAddress").asString())
+                    .build();
         }
         return currentUser;
     }

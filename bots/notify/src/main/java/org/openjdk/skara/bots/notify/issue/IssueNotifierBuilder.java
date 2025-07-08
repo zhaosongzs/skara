@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,6 @@ class IssueNotifierBuilder {
     private boolean setFixVersion = false;
     private LinkedHashMap<Pattern, String> fixVersions = null;
     private LinkedHashMap<Pattern, List<Pattern>> altFixVersions = null;
-    private JbsVault vault = null;
     private boolean prOnly = true;
     private boolean repoOnly = false;
     private String buildName = null;
@@ -51,6 +50,7 @@ class IssueNotifierBuilder {
     private Set<String> tagIgnoreOpt = Set.of();
     private boolean tagMatchPrefix = false;
     private List<IssueNotifier.BranchSecurity> defaultSecurity = List.of();
+    private boolean avoidForwardports = false;
 
     IssueNotifierBuilder issueProject(IssueProject issueProject) {
         this.issueProject = issueProject;
@@ -90,11 +90,6 @@ class IssueNotifierBuilder {
 
     public IssueNotifierBuilder altFixVersions(LinkedHashMap<Pattern, List<Pattern>> altFixVersions) {
         this.altFixVersions = altFixVersions;
-        return this;
-    }
-
-    public IssueNotifierBuilder vault(JbsVault vault) {
-        this.vault = vault;
         return this;
     }
 
@@ -158,6 +153,11 @@ class IssueNotifierBuilder {
         return this;
     }
 
+    public IssueNotifierBuilder avoidForwardports(boolean avoidForwardports) {
+        this.avoidForwardports = avoidForwardports;
+        return this;
+    }
+
     public boolean prOnly() {
         return prOnly;
     }
@@ -167,10 +167,9 @@ class IssueNotifierBuilder {
     }
 
     IssueNotifier build() {
-        var jbsBackport = new JbsBackport(issueProject.issueTracker().uri(), vault);
         return new IssueNotifier(issueProject, reviewLink, reviewIcon, commitLink, commitIcon,
-                setFixVersion, fixVersions, altFixVersions, jbsBackport, prOnly,
+                setFixVersion, fixVersions, altFixVersions, prOnly,
                 repoOnly, buildName, censusRepository, censusRef, namespace, useHeadVersion, originalRepository,
-                resolve, tagIgnoreOpt, tagMatchPrefix, defaultSecurity);
+                resolve, tagIgnoreOpt, tagMatchPrefix, defaultSecurity, avoidForwardports);
     }
 }

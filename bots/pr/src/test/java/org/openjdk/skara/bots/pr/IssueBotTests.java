@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@ package org.openjdk.skara.bots.pr;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.openjdk.skara.forge.CheckStatus;
+import org.openjdk.skara.forge.Review;
 import org.openjdk.skara.json.JSON;
 import org.openjdk.skara.test.CheckableRepository;
 import org.openjdk.skara.test.HostCredentials;
@@ -36,6 +37,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -135,12 +137,27 @@ public class IssueBotTests {
             // issue metadata should not be updated because no update in the issue
             assertEquals(issueMetadata2, issueMetadata3);
 
+            // Update issue title and run prBot first
+            // There should be no update in the check
+            issue.setTitle("This is an Issue");
+            TestBotRunner.runPeriodicItems(prBot);
+            check = pr.checks(editHash).get("jcheck");
+            var completedTime7 = check.completedAt().get();
+            assertEquals(completedTime6, completedTime7);
+
+            // Run issueBot
+            TestBotRunner.runPeriodicItems(issueBot);
+            check = pr.checks(editHash).get("jcheck");
+            var completedTime8 = check.completedAt().get();
+            assertNotEquals(completedTime7, completedTime8);
+            assertEquals("1: This is an Issue", pr.store().title());
+
             // Extra run of prBot and issueBot
             TestBotRunner.runPeriodicItems(prBot);
             TestBotRunner.runPeriodicItems(issueBot);
             check = pr.checks(editHash).get("jcheck");
-            var completedTime7 = check.completedAt().get();
-            assertEquals(completedTime6, completedTime7);
+            var completedTime9 = check.completedAt().get();
+            assertEquals(completedTime8, completedTime9);
         }
     }
 
@@ -291,6 +308,140 @@ public class IssueBotTests {
             TestBotRunner.runPeriodicItems(issueBot);
             assertTrue(pr.store().body().contains("This is an issue (**Bug** - P1)"));
             assertTrue(pr.store().body().contains("This is an issue2 (**Bug** - P4)"));
+        }
+    }
+
+    @Test
+    void maintainerApproval(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issueProject = credentials.getIssueProject();
+            var issue = issueProject.createIssue("This is an issue", List.of(), Map.of());
+            issue.setProperty("issuetype", JSON.of("Bug"));
+            issue.setProperty("priority", JSON.of("4"));
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(reviewer.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .issueProject(issueProject)
+                    .censusRepo(censusBuilder.build())
+                    .issuePRMap(issuePRMap)
+                    .approval(new Approval("", "jdk17u-fix-request", "jdk17u-fix-yes",
+                            "jdk17u-fix-no", "https://example.com", true, "maintainer approval"))
+                    .build();
+            var issueBot = new IssueBot(issueProject, List.of(author), Map.of(bot.name(), prBot), issuePRMap);
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", issue.id() + ": This is an issue");
+
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().labelNames().contains("rfr"));
+
+            issue.addLabel("jdk17u-fix-request");
+            TestBotRunner.runPeriodicItems(issueBot);
+            assertTrue(pr.store().body().contains("Requested"));
+
+            issue.addLabel("jdk17u-fix-yes");
+            TestBotRunner.runPeriodicItems(issueBot);
+            assertTrue(pr.store().body().contains("Approved"));
+        }
+    }
+
+    @Test
+    void maintainerApprovalWithBranchPattern(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issueProject = credentials.getIssueProject();
+            var issue = issueProject.createIssue("This is an issue", List.of(), Map.of());
+            issue.setProperty("issuetype", JSON.of("Bug"));
+            issue.setProperty("priority", JSON.of("4"));
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(reviewer.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            Approval approval = new Approval("", "-critical-request", "-critical-approved",
+                    "-critical-rejected", "https://example.com", true, "critical request");
+            approval.addBranchPrefix(Pattern.compile("jdk20.0.1"), "CPU23_04");
+            approval.addBranchPrefix(Pattern.compile("jdk20.0.2"), "CPU23_05");
+
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .issueProject(issueProject)
+                    .censusRepo(censusBuilder.build())
+                    .issuePRMap(issuePRMap)
+                    .approval(approval)
+                    .build();
+            var issueBot = new IssueBot(issueProject, List.of(author), Map.of(bot.name(), prBot), issuePRMap);
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var otherHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(otherHash, author.authenticatedUrl(), "jdk20.0.1", true);
+
+            var pr = credentials.createPullRequest(author, "master", "edit", issue.id() + ": This is an issue");
+
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().labelNames().contains("rfr"));
+            assertFalse(pr.store().body().contains("[TEST-1](http://localhost/project/testTEST-1) needs critical request"));
+
+            var reviewerPr = reviewer.pullRequest(pr.id());
+            reviewerPr.addReview(Review.Verdict.APPROVED, "Looks good");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().labelNames().contains("ready"));
+
+            pr.setTargetRef("jdk20.0.1");
+            reviewerPr.addReview(Review.Verdict.APPROVED, "Looks good");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("[TEST-1](http://localhost/project/testTEST-1) needs critical request"));
+            assertEquals("⚠️  @user1 This change is now ready for you to apply for [critical request](https://example.com). " +
+                            "This can be done directly in each associated issue or by using the " +
+                            "[/approval](https://wiki.openjdk.org/display/SKARA/Pull+Request+Commands#PullRequestCommands-/approval) command." +
+                            "<!-- PullRequestBot approval needed comment -->"
+                    , pr.store().comments().get(2).body());
+
+            issue.addLabel("CPU23_04-critical-request");
+            TestBotRunner.runPeriodicItems(issueBot);
+            assertTrue(pr.store().body().contains("Requested"));
+
+            issue.addLabel("CPU23_04-critical-approved");
+            TestBotRunner.runPeriodicItems(issueBot);
+            assertTrue(pr.store().body().contains("Approved"));
+            assertTrue(pr.store().body().contains("[TEST-1](http://localhost/project/testTEST-1) needs critical request"));
+            assertEquals("⚠️  @user1 This change is now ready for you to apply for [critical request](https://example.com). " +
+                            "This can be done directly in each associated issue or by using the " +
+                            "[/approval](https://wiki.openjdk.org/display/SKARA/Pull+Request+Commands#PullRequestCommands-/approval) command." +
+                            "<!-- PullRequestBot approval needed comment -->"
+                    , pr.store().comments().get(2).body());
         }
     }
 }

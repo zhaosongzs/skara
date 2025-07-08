@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,4 +44,6 @@ public interface IssueVisitor {
     void visit(BinaryIssue issue);
     void visit(SymlinkIssue issue);
     void visit(ProblemListsIssue problemListIssue);
+    void visit(IssuesTitleIssue issuesTitleIssue);
+    void visit(CopyrightFormatIssue copyrightFormatIssue);
 }

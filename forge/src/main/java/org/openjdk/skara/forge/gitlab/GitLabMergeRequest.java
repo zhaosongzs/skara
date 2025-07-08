@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -137,7 +137,7 @@ public class GitLabMergeRequest implements PullRequest {
                                            hash = cd.hash;
                                        }
                                    }
-                                   var id = obj.get("id").asInt();
+                                   var id = obj.get("id").toString();
                                    return new Review(createdAt, reviewer, verdict, hash, id, "", currentTargetRef);
                                }).toList();
         var targetRefChanges = targetRefChanges(notes);
@@ -199,7 +199,7 @@ public class GitLabMergeRequest implements PullRequest {
     }
 
     @Override
-    public void updateReview(int id, String body) {
+    public void updateReview(String id, String body) {
         throw new RuntimeException("not implemented yet");
     }
 
@@ -645,7 +645,7 @@ public class GitLabMergeRequest implements PullRequest {
     @Override
     public URI changeUrl(Hash base) {
         return URIBuilder.base(webUrl()).appendPath("/diffs")
-                         .setQuery(Map.of("start_sha", base.hex()))
+                         .setQuery(Map.of("start_sha", List.of(base.hex())))
                          .build();
     }
 
@@ -830,8 +830,14 @@ public class GitLabMergeRequest implements PullRequest {
     @Override
     public Diff diff() {
         var changes = request.get("changes").param("access_raw_diffs", "true").execute();
+        boolean complete;
+        if (changes.get("overflow").asBoolean()) {
+            complete = false;
+        } else {
+            complete = !changes.get("changes_count").asString().contains("+");
+        }
         var targetHash = repository.branchHash(targetRef()).orElseThrow();
-        return repository.toDiff(targetHash, headHash(), changes.get("changes"));
+        return repository.toDiff(targetHash, headHash(), changes.get("changes"), complete);
     }
 
     @Override

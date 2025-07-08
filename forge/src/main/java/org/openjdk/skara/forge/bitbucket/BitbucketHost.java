@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,12 @@
 package org.openjdk.skara.forge.bitbucket;
 
 import java.net.URI;
+import java.util.List;
 import java.util.Optional;
 import org.openjdk.skara.forge.Forge;
 import org.openjdk.skara.forge.HostedCommit;
 import org.openjdk.skara.forge.HostedRepository;
+import org.openjdk.skara.forge.MemberState;
 import org.openjdk.skara.host.Credential;
 import org.openjdk.skara.host.HostUser;
 import org.openjdk.skara.vcs.Hash;
@@ -77,7 +79,7 @@ public class BitbucketHost implements Forge {
     }
 
     @Override
-    public Optional<HostedCommit> search(Hash hash, boolean includeDiffs) {
+    public Optional<String> search(Hash hash, boolean includeDiffs) {
         throw new UnsupportedOperationException();
     }
 
@@ -88,6 +90,11 @@ public class BitbucketHost implements Forge {
 
     @Override
     public Optional<HostUser> user(String username) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<HostUser> userById(String username) {
         throw new UnsupportedOperationException();
     }
 
@@ -104,5 +111,20 @@ public class BitbucketHost implements Forge {
     @Override
     public String hostname() {
         return uri.getHost();
+    }
+
+    @Override
+    public List<HostUser> groupMembers(String group) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void addGroupMember(String group, HostUser user) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public MemberState groupMemberState(String group, HostUser user) {
+        throw new UnsupportedOperationException();
     }
 }

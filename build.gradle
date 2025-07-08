@@ -62,7 +62,7 @@ configure(subprojects.findAll() { it.name != 'bots' }) {
     }
 
     tasks.withType(JavaCompile).configureEach {
-        options.release.set(17)
+        options.release.set(21)
     }
 
     compileJava.options.encoding = 'UTF-8'
@@ -184,7 +184,7 @@ def getCPU() {
 
 task local(type: Copy) {
     doFirst {
-        delete project.buildDir
+        delete project.buildDir.toString() + '/cli'
     }
 
     def os = getOS()
@@ -202,7 +202,7 @@ task local(type: Copy) {
                       '/cli/build/distributions/cli' +
                       '-' + project.version + '-' +
                       os + '-' + cpu + '.zip'))
-    into project.buildDir
+    into project.buildDir.toString() + '/cli'
 }
 
 task bots(type: Copy) {
@@ -212,13 +212,10 @@ task bots(type: Copy) {
 
     dependsOn ':bots:cli:images'
 
-    def os = getOS()
-    def cpu = getCPU()
-
     from zipTree(file(project.rootDir.toString() +
                       '/bots/cli/build/distributions/cli' +
-                      '-' + project.version + '-' +
-                      os + '-' + cpu + '.zip'))
+                      '-' + project.version +
+                      '-linux-x64.zip'))
     into project.rootDir.toString() + '/bots/bin'
 }
 

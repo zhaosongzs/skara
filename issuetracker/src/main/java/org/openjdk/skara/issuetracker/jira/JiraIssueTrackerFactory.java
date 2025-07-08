@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,12 +44,17 @@ public class JiraIssueTrackerFactory implements IssueTrackerFactory {
                 var vaultUrl = URIBuilder.base(credential.username()).build();
                 var jiraVault = new JiraVault(vaultUrl, credential.password(), uri);
 
-                if (configuration.contains("security") && configuration.contains("visibility")) {
-                    return new JiraHost(uri, jiraVault, configuration.get("visibility").asString(), configuration.get("security").asString());
+                if (configuration.contains("visibility")) {
+                    return new JiraHost(uri, jiraVault, configuration.get("visibility").asString());
                 }
                 return new JiraHost(uri, jiraVault);
             } else {
-                throw new RuntimeException("basic authentication not implemented yet");
+                if (credential.username().isEmpty() && !credential.password().isEmpty()) {
+                    // This branch is only used to support test code
+                    return createWithPat(uri, credential.password());
+                } else {
+                    throw new RuntimeException("basic authentication not implemented yet");
+                }
             }
         }
     }
@@ -63,8 +68,10 @@ public class JiraIssueTrackerFactory implements IssueTrackerFactory {
     }
 
     /**
-     * Get the issue tracker according to personal access token
-     * This method is only used by the manual test code.
+     * Get the issue tracker according to personal access token.
+     * This method is only used to support to test code (it is
+     * called from a branch in production code that is only
+     * used to support test code).
      */
     public IssueTracker createWithPat(URI uri, String pat) {
         return new JiraHost(uri, "Authorization", pat);

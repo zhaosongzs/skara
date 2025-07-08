@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,13 @@ import java.time.Duration;
 import org.openjdk.skara.forge.*;
 import org.openjdk.skara.host.HostUser;
 import org.openjdk.skara.issuetracker.*;
-import org.openjdk.skara.json.JSONValue;
+import org.openjdk.skara.json.*;
+import org.openjdk.skara.network.RestRequest;
 import org.openjdk.skara.vcs.*;
 
 import java.io.*;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.ZonedDateTime;
 import java.util.*;
@@ -40,8 +40,86 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 import static org.openjdk.skara.issuetracker.jira.JiraProject.JEP_NUMBER;
+import static org.openjdk.skara.issuetracker.jira.JiraProject.RESOLVED_IN_BUILD;
 
 public class TestHost implements Forge, IssueTracker {
+    /***
+     * TestBackportEndpoint simulates the JBS custom endpoint for creating backports in JBS
+     */
+    private static class TestBackportEndpoint implements IssueTracker.CustomEndpoint, IssueTracker.CustomEndpointRequest {
+        private final TestHost host;
+
+        private JSONValue body;
+
+        private TestBackportEndpoint(TestHost host) {
+            this.host = host;
+        }
+
+        @Override
+        public IssueTracker.CustomEndpointRequest post() {
+            return this;
+        }
+
+        @Override
+        public IssueTracker.CustomEndpointRequest body(JSONValue body) {
+            this.body = body;
+            return this;
+        }
+
+        @Override
+        public IssueTracker.CustomEndpointRequest header(String value, String name) {
+            // Not needed
+            return this;
+        }
+
+        @Override
+        public IssueTracker.CustomEndpointRequest onError(RestRequest.ErrorTransform transform) {
+            // Not needed
+            return this;
+        }
+
+        @Override
+        public JSONValue execute() {
+            if (body == null) {
+                throw new IllegalStateException("Must set body");
+            }
+
+            // A TestHost can only handle a single project and since a backport
+            // requires a primary issue to exist, then there must already exist
+            // a project for the primary issue
+            var project = host.data.issueProjects.entrySet().stream().findFirst().orElseThrow().getValue();
+            var primary = project.issue(body.get("parentIssueKey").asString()).orElseThrow();
+
+            var props = new HashMap<String, JSONValue>();
+            props.put("issuetype", JSON.of("Backport"));
+            // Propagate properties set in POST request body
+            if (body.contains("level")) {
+                props.put("security", body.get("level"));
+            }
+            if (body.contains("fixVersion")) {
+                props.put("fixVersions", JSON.array().add(body.get("fixVersion")));
+            }
+
+            // Propagate properties from the primary issue *except* those
+            // that can be set via the POST request body. The custom
+            // RESOLVED_IN_BUILD property should also not propagate
+            var ignore = Set.of("issuetype", "assignee", "security", "fixVersions", RESOLVED_IN_BUILD);
+            for (var entry : primary.properties().entrySet()) {
+                if (!ignore.contains(entry.getKey())) {
+                    props.put(entry.getKey(), entry.getValue());
+                }
+            }
+
+            var backport = project.createIssue(primary.title(), Arrays.asList(primary.body().split("\n")), props);
+            if (body.contains("assignee")) {
+                var user = host.user(body.get("assignee").asString()).orElseThrow();
+                backport.setAssignees(List.of(user));
+            }
+            backport.addLink(Link.create(primary, "backport of").build());
+            primary.addLink(Link.create(backport, "backported by").build());
+            return JSON.object().put("key", backport.id());
+        }
+    }
 
     /**
      * If test needs to name a repository that should not exist on the TestHost,
@@ -70,12 +148,15 @@ public class TestHost implements Forge, IssueTracker {
         private final Map<String, TestIssueTrackerIssueStore> issues = new HashMap<>();
     }
 
+    // Map of org to map of user to MemberState
+    private final Map<String, Map<String, MemberState>> organizationMembers = new HashMap<>();
+
     private Repository createLocalRepository() {
         var folder = new TemporaryDirectory();
         data.folders.add(folder);
         try {
             var repo = TestableRepository.init(folder.path().resolve("hosted.git"), VCS.GIT);
-            Files.writeString(repo.root().resolve("content.txt"), "Initial content", StandardCharsets.UTF_8);
+            Files.writeString(repo.root().resolve("content.txt"), "Initial content");
             repo.add(repo.root().resolve("content.txt"));
             var hash = repo.commit("Initial content", "author", "author@none");
             repo.push(hash, repo.root().toUri(), "testhostcontent");
@@ -101,6 +182,16 @@ public class TestHost implements Forge, IssueTracker {
     private TestHost(HostData data, int currentUser) {
         this.data = data;
         this.currentUser = currentUser;
+    }
+
+    @Override
+    public Optional<IssueTracker.CustomEndpoint> lookupCustomEndpoint(String path) {
+        switch (path) {
+            case "/rest/jbs/1.0/backport/":
+                return Optional.of(new TestBackportEndpoint(this));
+            default:
+                return Optional.empty();
+        }
     }
 
     @Override
@@ -164,6 +255,13 @@ public class TestHost implements Forge, IssueTracker {
     }
 
     @Override
+    public Optional<HostUser> userById(String id) {
+        return data.users.stream()
+                .filter(user -> user.id().equals(id))
+                .findAny();
+    }
+
+    @Override
     public HostUser currentUser() {
         return data.users.get(currentUser);
     }
@@ -174,12 +272,12 @@ public class TestHost implements Forge, IssueTracker {
     }
 
     @Override
-    public Optional<HostedCommit> search(Hash hash, boolean includeDiffs) {
+    public Optional<String> search(Hash hash, boolean includeDiffs) {
         for (var key : data.repositories.keySet()) {
             var repo = repository(key).orElseThrow();
             var commit = repo.commit(hash, includeDiffs);
             if (commit.isPresent()) {
-                return commit;
+                return Optional.of(repo.name());
             }
         }
         return Optional.empty();
@@ -292,5 +390,40 @@ public class TestHost implements Forge, IssueTracker {
     @Override
     public Duration timeStampQueryPrecision() {
         return timeStampQueryPrecision;
+    }
+
+    @Override
+    public List<HostUser> groupMembers(String group) {
+        return organizationMembers.getOrDefault(group, Map.of()).keySet().stream()
+                .map(u -> user(u).orElseThrow())
+                .toList();
+    }
+
+    @Override
+    public void addGroupMember(String group, HostUser user) {
+        organizationMembers.putIfAbsent(group, new HashMap<>());
+        organizationMembers.get(group).put(user.username(), MemberState.PENDING);
+    }
+
+    /**
+     * Test method to update an existing org member to active status
+     */
+    public void confirmGroupMember(String group, String user) {
+        organizationMembers.get(group).put(user, MemberState.ACTIVE);
+    }
+
+    @Override
+    public MemberState groupMemberState(String group, HostUser user) {
+        return organizationMembers.getOrDefault(group, Map.of()).getOrDefault(user.username(), MemberState.MISSING);
+    }
+
+    /**
+     * Test method to update the active state of an existing user
+     */
+    public void setUserActive(String user, boolean active) {
+        var currentUser = user(user).orElseThrow();
+        data.users.remove(currentUser);
+        var newUser = HostUser.create(currentUser.id(), currentUser.username(), currentUser.fullName(), active);
+        data.users.add(newUser);
     }
 }

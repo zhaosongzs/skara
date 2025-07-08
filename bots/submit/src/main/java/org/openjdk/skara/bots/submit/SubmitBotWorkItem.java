@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,10 +51,9 @@ public class SubmitBotWorkItem implements WorkItem {
 
     @Override
     public boolean concurrentWith(WorkItem other) {
-        if (!(other instanceof SubmitBotWorkItem)) {
+        if (!(other instanceof SubmitBotWorkItem otherItem)) {
             return true;
         }
-        SubmitBotWorkItem otherItem = (SubmitBotWorkItem)other;
         if (!executor.checkName().equals(otherItem.executor.checkName())) {
             return true;
         }
@@ -84,7 +83,7 @@ public class SubmitBotWorkItem implements WorkItem {
         try {
             var localRepo = Repository.materialize(prFolder, pr.repository().authenticatedUrl(),
                                                    "+" + pr.targetRef() + ":submit_" + pr.repository().name());
-            var headHash = localRepo.fetch(pr.repository().authenticatedUrl(), pr.headHash().hex(), false);
+            var headHash = localRepo.fetch(pr.repository().authenticatedUrl(), pr.headHash().hex(), false).orElseThrow();
 
             var checkBuilder = CheckBuilder.create(executor.checkName(), headHash);
             pr.createCheck(checkBuilder.build());

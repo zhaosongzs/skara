@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@ import org.openjdk.skara.test.TemporaryDirectory;
 import org.openjdk.skara.test.TestBotRunner;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
@@ -409,9 +408,9 @@ class CSRBotTests {
             assertTrue(pr.store().labelNames().contains("backport"));
 
             // Remove `version=0.1` from `.jcheck/conf`, set the version as null in the edit branch
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("version=0.1", "");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             var confHash = localRepo.commit("Set version as null", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -422,9 +421,9 @@ class CSRBotTests {
             assertFalse(pr.store().labelNames().contains("csr"));
 
             // Add `version=bla` to `.jcheck/conf`, set the version as a wrong value
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("project=test", "project=test\nversion=bla");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as a wrong value", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -437,9 +436,9 @@ class CSRBotTests {
             assertEquals(1, pr.diff().patches().size());
 
             // Set the `version` in `.jcheck/conf` as 17 which is an available version.
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("version=bla", "version=17");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as 17", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -494,9 +493,9 @@ class CSRBotTests {
             // Set the backport CSR to have multiple fix versions, included 11.
             backportCsr.setProperty("fixVersions", JSON.array().add("17").add("11").add("8"));
             // Set the `version` in `.jcheck/conf` as 11.
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("version=17", "version=11");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as 11", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "edit", true);
@@ -567,7 +566,7 @@ class CSRBotTests {
             // Add issue2 to this pr
             pr.addComment("/issue " + issue2.id());
             TestBotRunner.runPeriodicItems(prBot);
-            assertTrue(pr.store().comments().get(pr.store().comments().size() - 1).body().contains("solves: '2'"));
+            assertTrue(pr.store().comments().getLast().body().contains("solves: '2'"));
 
             // Add a csr to issue2
             var csr2 = issueProject.createIssue("This is an CSR for issue2", List.of(), Map.of());
@@ -587,7 +586,7 @@ class CSRBotTests {
             // Add issue3 to this pr
             pr.addComment("/issue " + issue3.id());
             TestBotRunner.runPeriodicItems(prBot);
-            assertTrue(pr.store().comments().get(pr.store().comments().size() - 1).body().contains("solves: '4'"));
+            assertTrue(pr.store().comments().getLast().body().contains("solves: '4'"));
 
             // Withdrawn the csr for issue2
             csr2.setState(Issue.State.CLOSED);
@@ -670,9 +669,9 @@ class CSRBotTests {
 
             // Change .jcheck/conf in targetBranch
             localRepo.checkout(masterHash);
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("version=0.1", "version=17");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             var confHash = localRepo.commit("Set version as 17", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -684,7 +683,7 @@ class CSRBotTests {
             reviewer.pullRequest(pr.id()).addComment("/csr unneeded");
             TestBotRunner.runPeriodicItems(prBot);
 
-            assertTrue(pr.store().comments().get(pr.store().comments().size() - 1).body()
+            assertTrue(pr.store().comments().getLast().body()
                     .contains("@user2 The CSR requirement cannot be removed as CSR issues already exist. " +
                             "Please withdraw [TEST-2](http://localhost/project/testTEST-2) and then use the command `/csr unneeded` again."));
         }

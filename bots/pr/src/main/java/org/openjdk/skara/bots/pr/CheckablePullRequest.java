@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@ import org.openjdk.skara.bots.common.SolvesTracker;
 import org.openjdk.skara.census.*;
 import org.openjdk.skara.forge.*;
 import org.openjdk.skara.host.HostUser;
+import org.openjdk.skara.issuetracker.Comment;
 import org.openjdk.skara.jcheck.*;
 import org.openjdk.skara.vcs.*;
 import org.openjdk.skara.vcs.openjdk.*;
@@ -39,18 +40,27 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class CheckablePullRequest {
+    public static final int COMMIT_LIST_LIMIT = 3;
+
     private static final Pattern BACKPORT_PATTERN = Pattern.compile("<!-- backport ([0-9a-z]{40}) -->");
+    private static final Pattern BACKPORT_REPO_PATTERN = Pattern.compile("<!-- repo (.+) -->");
 
     private final PullRequest pr;
     private final Repository localRepo;
-    private final boolean ignoreStaleReviews;
+    private final boolean useStaleReviews;
     private final List<String> confOverride;
+    private final List<Comment> comments;
+    private final MergePullRequestReviewConfiguration reviewMerge;
+    private final ReviewCoverage reviewCoverage;
 
-    CheckablePullRequest(PullRequest pr, Repository localRepo, boolean ignoreStaleReviews,
-            HostedRepository jcheckRepo, String jcheckName, String jcheckRef) {
+    CheckablePullRequest(PullRequest pr, Repository localRepo, boolean useStaleReviews,
+            HostedRepository jcheckRepo, String jcheckName, String jcheckRef, List<Comment> comments, MergePullRequestReviewConfiguration reviewMerge, ReviewCoverage reviewCoverage) {
         this.pr = pr;
         this.localRepo = localRepo;
-        this.ignoreStaleReviews = ignoreStaleReviews;
+        this.useStaleReviews = useStaleReviews;
+        this.comments = comments;
+        this.reviewMerge = reviewMerge;
+        this.reviewCoverage = reviewCoverage;
 
         if (jcheckRepo != null) {
             confOverride = jcheckRepo.fileContents(jcheckName, jcheckRef).orElseThrow(
@@ -61,26 +71,23 @@ public class CheckablePullRequest {
         }
     }
 
-    private String commitMessage(Hash head, List<Review> activeReviews, Namespace namespace, boolean manualReviewers, Hash original) throws IOException {
+    private String commitMessage(Hash head, List<Review> activeReviews, Namespace namespace, boolean manualReviewersAndStaleReviewers, Hash original) throws IOException {
         var eligibleReviews = activeReviews.stream()
-                                           // Reviews without a hash are never valid as they referred to no longer
-                                           // existing commits.
-                                           .filter(review -> review.hash().isPresent())
-                                           .filter(review -> review.targetRef().equals(pr.targetRef()))
-                                           .filter(review -> !ignoreStaleReviews || review.hash().orElseThrow().equals(pr.headHash()))
-                                           .filter(review -> review.verdict() == Review.Verdict.APPROVED)
+                                           .filter(reviewCoverage::covers)
                                            .collect(Collectors.toList());
         var reviewers = reviewerNames(eligibleReviews, namespace);
-        var comments = pr.comments();
         var currentUser = pr.repository().forge().currentUser();
 
-        if (manualReviewers) {
-            var allReviewers = reviewerNames(activeReviews, namespace);
-            var additionalReviewers = Reviewers.reviewers(currentUser, comments);
-            for (var additionalReviewer : additionalReviewers) {
-                if (!allReviewers.contains(additionalReviewer)) {
-                    reviewers.add(additionalReviewer);
+        if (manualReviewersAndStaleReviewers) {
+            reviewers.addAll(Reviewers.reviewers(currentUser, comments));
+            if (!useStaleReviews) {
+                var staleReviews = new ArrayList<Review>();
+                for (var review : activeReviews) {
+                    if (review.verdict() == Review.Verdict.APPROVED && !eligibleReviews.contains(review)) {
+                        staleReviews.add(review);
+                    }
                 }
+                reviewers.addAll(reviewerNames(staleReviews, namespace));
             }
         }
 
@@ -88,8 +95,6 @@ public class CheckablePullRequest {
                                                                comments).stream()
                                                  .map(email -> Author.fromString(email.toString()))
                                                  .collect(Collectors.toList());
-
-        var additionalIssues = SolvesTracker.currentSolved(currentUser, comments);
         var summary = Summary.summary(currentUser, comments);
         CommitMessageBuilder commitMessageBuilder;
         if (PullRequestUtils.isMerge(pr)) {
@@ -116,6 +121,7 @@ public class CheckablePullRequest {
             var issue = Issue.fromStringRelaxed(pr.title());
             commitMessageBuilder = issue.map(CommitMessage::title).orElseGet(() -> CommitMessage.title(pr.title()));
             if (issue.isPresent()) {
+                var additionalIssues = SolvesTracker.currentSolved(currentUser, comments, pr.title());
                 commitMessageBuilder.issues(additionalIssues);
             }
             if (original != null) {
@@ -179,45 +185,63 @@ public class CheckablePullRequest {
             committer = author;
         }
 
+        var overridingAuthor = OverridingAuthor.author(pr.repository().forge().currentUser(), comments);
+        if (overridingAuthor.isPresent()) {
+            author = new Author(overridingAuthor.get().fullName().orElse(""), overridingAuthor.get().address());
+        }
+
         var activeReviews = filterActiveReviews(pr.reviews(), pr.targetRef());
         var commitMessage = commitMessage(finalHead, activeReviews, namespace, false, original);
         return PullRequestUtils.createCommit(pr, localRepo, finalHead, author, committer, commitMessage);
     }
 
-    Hash amendManualReviewers(Hash commit, Namespace namespace, Hash original) throws IOException {
+    Hash amendManualReviewersAndStaleReviewers(Hash hash, Namespace namespace, Hash original) throws IOException {
         var activeReviews = filterActiveReviews(pr.reviews(), pr.targetRef());
-        var originalCommitMessage = commitMessage(commit, activeReviews, namespace, false, original);
-        var amendedCommitMessage = commitMessage(commit, activeReviews, namespace, true, original);
+        var originalCommitMessage = commitMessage(hash, activeReviews, namespace, false, original);
+        var amendedCommitMessage = commitMessage(hash, activeReviews, namespace, true, original);
 
         if (originalCommitMessage.equals(amendedCommitMessage)) {
-            return commit;
+            return hash;
         } else {
-            return localRepo.amend(amendedCommitMessage);
+            var commit = localRepo.lookup(hash).orElseThrow();
+            return localRepo.amend(amendedCommitMessage, commit.author().name(), commit.author().email(), commit.committer().name(), commit.committer().email());
         }
     }
 
-    PullRequestCheckIssueVisitor createVisitor(Hash hash) throws IOException {
-        var checks = JCheck.checksFor(localRepo, hash);
+    PullRequestCheckIssueVisitor createVisitor(JCheckConfiguration conf) throws IOException {
+        var checks = JCheck.checksFor(localRepo, conf);
         return new PullRequestCheckIssueVisitor(checks);
     }
 
-    void executeChecks(Hash localHash, CensusInstance censusInstance, PullRequestCheckIssueVisitor visitor,
-                       List<String> additionalConfiguration, Hash hash) throws IOException {
-        Optional<JCheckConfiguration> conf;
-        if (confOverride != null) {
-            conf = JCheck.parseConfiguration(confOverride, additionalConfiguration);
-        } else {
-            conf = JCheck.parseConfiguration(localRepo, hash, additionalConfiguration);
+    JCheckConfiguration parseJCheckConfiguration(Hash hash) throws IOException {
+        var original = confOverride == null ?
+            JCheck.parseConfiguration(localRepo, hash, List.of()) :
+            JCheck.parseConfiguration(confOverride, List.of());
+
+        if (original.isEmpty()) {
+            throw new IllegalStateException("Cannot parse JCheck configuration for commit with hash " + hash.hex());
         }
-        if (conf.isEmpty()) {
-            throw new RuntimeException("Failed to parse jcheck configuration at: " + hash + " with extra: " + additionalConfiguration);
+
+        var botUser = pr.repository().forge().currentUser();
+        var additional = AdditionalConfiguration.get(original.get(), botUser, comments, reviewMerge);
+        if (additional.isEmpty()) {
+            return original.get();
         }
-        visitor.setConfiguration(conf.get());
-        try (var issues = JCheck.check(localRepo, censusInstance.census(), CommitMessageParsers.v1, localHash,
-                                       conf.get())) {
-            for (var issue : issues) {
+        var result = confOverride == null ?
+            JCheck.parseConfiguration(localRepo, hash, additional) :
+            JCheck.parseConfiguration(confOverride, additional);
+        return result.orElseThrow(
+                    () -> new IllegalStateException("Cannot parse JCheck configuration with additional configuration for commit with hash " + hash.hex()));
+    }
+
+    List<org.openjdk.skara.jcheck.Issue> executeChecks(Hash hash, CensusInstance censusInstance, PullRequestCheckIssueVisitor visitor, JCheckConfiguration conf) throws IOException {
+        visitor.setConfiguration(conf);
+        try (var issues = JCheck.check(localRepo, censusInstance.census(), CommitMessageParsers.v1, hash, conf)) {
+            var list = issues.asList();
+            for (var issue : list) {
                 issue.accept(visitor);
             }
+            return list;
         }
     }
 
@@ -249,12 +273,12 @@ public class CheckablePullRequest {
             reply.print(pr.targetRef());
             reply.print("` branch:\n\n");
             divergingCommits.stream()
-                            .limit(10)
+                            .limit(COMMIT_LIST_LIMIT)
                             .forEach(c -> reply.println(" * " + c.hash().hex() + ": " + c.message().get(0)));
-            if (divergingCommits.size() > 10) {
+            if (divergingCommits.size() > COMMIT_LIST_LIMIT) {
                 try {
                     var baseHash = localRepo.mergeBase(targetHash(), pr.headHash());
-                    reply.println(" * ... and " + (divergingCommits.size() - 10) + " more: " +
+                    reply.println(" * ... and " + (divergingCommits.size() - COMMIT_LIST_LIMIT) + " more: " +
                                           pr.repository().webUrl(baseHash.hex(), pr.targetRef()));
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
@@ -290,12 +314,16 @@ public class CheckablePullRequest {
     }
 
     Hash findOriginalBackportHash() {
-        return findOriginalBackportHash(pr);
+        return findOriginalBackportHash(pr, comments);
     }
 
-    static Hash findOriginalBackportHash(PullRequest pr) {
+    String findOriginalBackportRepo() {
+        return findOriginalBackportRepo(pr, comments);
+    }
+
+    static Hash findOriginalBackportHash(PullRequest pr, List<Comment> comments) {
         var botUser = pr.repository().forge().currentUser();
-        return pr.comments()
+        return comments
                 .stream()
                 .filter(c -> c.author().equals(botUser))
                 .flatMap(c -> Stream.of(c.body().split("\n")))
@@ -303,6 +331,19 @@ public class CheckablePullRequest {
                 .filter(Matcher::find)
                 .reduce((first, second) -> second)
                 .map(l -> new Hash(l.group(1)))
+                .orElse(null);
+    }
+
+    static String findOriginalBackportRepo(PullRequest pr, List<Comment> comments) {
+        var botUser = pr.repository().forge().currentUser();
+        return comments
+                .stream()
+                .filter(c -> c.author().equals(botUser))
+                .flatMap(c -> Stream.of(c.body().split("\n")))
+                .map(BACKPORT_REPO_PATTERN::matcher)
+                .filter(Matcher::find)
+                .reduce((first, second) -> second)
+                .map(l -> l.group(1))
                 .orElse(null);
     }
 

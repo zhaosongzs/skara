@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@ import org.openjdk.skara.test.*;
 import org.openjdk.skara.vcs.*;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 
@@ -581,7 +580,7 @@ class IntegrateTests {
             // Break the census to cause an exception
             var localCensus = Repository.materialize(censusFolder.path(), censusRepo.authenticatedUrl(), "+master:current_census");
             var currentCensusHash = localCensus.resolve("current_census").orElseThrow();
-            Files.writeString(censusFolder.path().resolve("contributors.xml"), "This is not xml", StandardCharsets.UTF_8);
+            Files.writeString(censusFolder.path().resolve("contributors.xml"), "This is not xml");
             localCensus.add(censusFolder.path().resolve("contributors.xml"));
             var badCensusHash = localCensus.commit("Bad census update", "duke", "duke@openjdk.org");
             localCensus.push(badCensusHash, censusRepo.authenticatedUrl(), "master", true);
@@ -712,8 +711,7 @@ class IntegrateTests {
     @Test
     void missingContributingFile(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory();
-             var pushedFolder = new TemporaryDirectory()) {
+             var tempFolder = new TemporaryDirectory()) {
 
             var author = credentials.getHostedRepository();
             var integrator = credentials.getHostedRepository();
@@ -740,7 +738,7 @@ class IntegrateTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with an instructional message and no link to CONTRIBUTING.md
-            var lastComment = pr.comments().get(pr.comments().size() - 1);
+            var lastComment = pr.comments().getLast();
             assertFalse(lastComment.body().contains("CONTRIBUTING.md"));
         }
     }
@@ -748,8 +746,7 @@ class IntegrateTests {
     @Test
     void existingContributingFile(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory();
-             var pushedFolder = new TemporaryDirectory()) {
+             var tempFolder = new TemporaryDirectory()) {
 
             var author = credentials.getHostedRepository();
             var integrator = credentials.getHostedRepository();
@@ -780,7 +777,7 @@ class IntegrateTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with an instructional message and no link to CONTRIBUTING.md
-            var lastComment = pr.comments().get(pr.comments().size() - 1);
+            var lastComment = pr.comments().getLast();
             assertTrue(lastComment.body().contains("CONTRIBUTING.md"));
         }
     }
@@ -788,8 +785,7 @@ class IntegrateTests {
     @Test
     void contributorMissingEmail(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory();
-             var pushedFolder = new TemporaryDirectory()) {
+             var tempFolder = new TemporaryDirectory()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var committer = credentials.getHostedRepository();
@@ -829,8 +825,7 @@ class IntegrateTests {
     @Test
     void invalidHash(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory();
-             var pushedFolder = new TemporaryDirectory()) {
+             var tempFolder = new TemporaryDirectory()) {
 
             var author = credentials.getHostedRepository();
             var integrator = credentials.getHostedRepository();
@@ -1112,8 +1107,7 @@ class IntegrateTests {
     @Test
     void retryAfterInterrupt(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory();
-             var censusFolder = new TemporaryDirectory()) {
+             var tempFolder = new TemporaryDirectory()) {
 
             var author = credentials.getHostedRepository();
             var integrator = credentials.getHostedRepository();
@@ -1216,7 +1210,7 @@ class IntegrateTests {
 
             TestBotRunner.runPeriodicItems(mergeBot);
 
-            assertTrue(pr.comments().get(pr.comments().size() - 1).body()
+            assertTrue(pr.comments().getLast().body()
                     .contains("can only be used in open pull requests"));
         }
     }
@@ -1238,8 +1232,7 @@ class IntegrateTests {
     @Test
     void retryAfterInterruptExtraChange(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory();
-             var censusFolder = new TemporaryDirectory()) {
+             var tempFolder = new TemporaryDirectory()) {
 
             var author = credentials.getHostedRepository();
             var integrator = credentials.getHostedRepository();
@@ -1286,7 +1279,7 @@ class IntegrateTests {
 
             // Add a new commit to master branch
             localRepo.checkout(new Branch("master"));
-            localRepo.fetch(author.authenticatedUrl(), "master");
+            localRepo.fetch(author.authenticatedUrl(), "master").orElseThrow();
             localRepo.merge(new Branch("FETCH_HEAD"));
             var integratedHash = localRepo.resolve("master");
             var newMasterHash = CheckableRepository.appendAndCommit(localRepo, "Another line",

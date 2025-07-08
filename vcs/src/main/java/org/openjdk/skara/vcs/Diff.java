@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@ import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.nio.file.Files;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -37,11 +36,17 @@ public class Diff {
     private final Hash from;
     private final Hash to;
     private final List<Patch> patches;
+    private final boolean complete;
 
     public Diff(Hash from, Hash to, List<Patch> patches) {
+        this(from, to, patches, true);
+    }
+
+    public Diff(Hash from, Hash to, List<Patch> patches, boolean complete) {
         this.from = from;
         this.to = to;
         this.patches = patches;
+        this.complete = complete;
     }
 
     public Hash from() {
@@ -54,6 +59,10 @@ public class Diff {
 
     public List<Patch> patches() {
         return patches;
+    }
+
+    public boolean complete() {
+        return complete;
     }
 
     public List<WebrevStats> stats() {
@@ -78,7 +87,7 @@ public class Diff {
     }
 
     public void toFile(Path p) throws IOException {
-        try (var w = Files.newBufferedWriter(p, StandardCharsets.UTF_8)) {
+        try (var w = Files.newBufferedWriter(p)) {
             write(w);
         }
     }

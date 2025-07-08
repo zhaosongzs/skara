@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -89,6 +89,7 @@ public class RestRequest {
         private ErrorTransform onError;
         private String sha256Header;
         private boolean skipLimiter = false;
+        private boolean failOnEmptyResponse = false;
 
         private QueryBuilder(RequestType queryType, String endpoint) {
             this.queryType = queryType;
@@ -212,6 +213,11 @@ public class RestRequest {
             return this;
         }
 
+        public QueryBuilder failOnEmptyResponse(boolean failOnEmptyResponse) {
+            this.failOnEmptyResponse = failOnEmptyResponse;
+            return this;
+        }
+
         public JSONValue execute() {
             try {
                 return RestRequest.this.execute(this);
@@ -222,6 +228,10 @@ public class RestRequest {
 
         public String executeUnparsed() throws IOException {
             return RestRequest.this.executeUnparsed(this);
+        }
+
+        public HttpRequest build() {
+            return RestRequest.this.build(this);
         }
 
         @Override
@@ -318,10 +328,17 @@ public class RestRequest {
         while (true) {
             try {
                 response = cache.send(authId, request, skipLimiter);
+                // If the status code is 301(Moved Permanently), follow the redirect link
+                if (response.statusCode() == 301 && retryCount < 2) {
+                    var location = response.headers().firstValue("location");
+                    if (location.isPresent()) {
+                        request = request.uri(URI.create(location.get()));
+                    }
+                }
                 // If we are using authorization and get a 401, we need to retry to give
                 // the authorization mechanism a chance to refresh stale tokens. Retry if
                 // we get a new set of authorization headers.
-                if (response.statusCode() == 401 && retryCount < 2 && authHeaders != null
+                else if (response.statusCode() == 401 && retryCount < 2 && authHeaders != null
                         && !authHeaders.equals(addAuthHeaders(request))) {
                     log.info("Failed authorization for request: " + request.build().uri()
                             + ", retry count: " + retryCount);
@@ -331,7 +348,7 @@ public class RestRequest {
             } catch (InterruptedException | IOException e) {
                 if (retryCount < 5) {
                     try {
-                        Thread.sleep(retryCount * retryBackoffStep.toMillis());
+                        Thread.sleep(retryBackoffStep.multipliedBy(retryCount));
                     } catch (InterruptedException ignored) {
                     }
                 } else {
@@ -373,7 +390,7 @@ public class RestRequest {
         try {
             return JSON.parse(response.body());
         } catch (RuntimeException e) {
-            throw new UncheckedRestException("Failed to parse response", e, response.statusCode());
+            throw new UncheckedRestException("Failed to parse response", e, response.statusCode(), response.request());
         }
     }
 
@@ -385,10 +402,11 @@ public class RestRequest {
                     return transformed;
                 }
             }
-            log.warning("Request returned bad status: " + response.statusCode());
+            log.warning("Request " + response.request().method() + " " + response.request().uri()
+                    + " returned bad status: " + response.statusCode());
             log.info(queryBuilder.toString());
             log.info(response.body());
-            throw new UncheckedRestException(response.statusCode());
+            throw new UncheckedRestException(response.statusCode(), response.request());
         } else {
             return Optional.empty();
         }
@@ -402,7 +420,14 @@ public class RestRequest {
             uriBuilder = uriBuilder.appendPath(endpoint);
         }
         if (!params.isEmpty()) {
-            uriBuilder.setQuery(params.stream().collect(Collectors.toMap(param -> param.key, param -> param.value)));
+            var query = new LinkedHashMap<String, List<String>>();
+            for (var param : params) {
+                if (!query.containsKey(param.key)) {
+                    query.put(param.key, new ArrayList<String>());
+                }
+                query.get(param.key).add(param.value);
+            }
+            uriBuilder.setQuery(query);
         }
         var uri = uriBuilder.build();
 
@@ -484,6 +509,12 @@ public class RestRequest {
         return Optional.of(getHttpRequestBuilder(uri).GET());
     }
 
+    private HttpRequest build(QueryBuilder queryBuilder) {
+        var request = createRequest(queryBuilder.queryType, queryBuilder.endpoint, queryBuilder.composedBody(),
+                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header);
+        return request.build();
+    }
+
     private JSONValue execute(QueryBuilder queryBuilder) throws IOException {
         var request = createRequest(queryBuilder.queryType, queryBuilder.endpoint, queryBuilder.composedBody(),
                 queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header);
@@ -493,6 +524,12 @@ public class RestRequest {
         responseCounter.labels(Integer.toString(response.statusCode()), Boolean.toString(errorTransform.isPresent())).inc();
         if (errorTransform.isPresent()) {
             return errorTransform.get();
+        }
+
+        if (queryBuilder.failOnEmptyResponse && response.body().isBlank()) {
+            throw new UncheckedRestException("Empty response body"
+                    + response.headers().firstValue("Location").map(s -> ", redirect: " + s).orElse(""),
+                    response.statusCode(), request.build());
         }
 
         var nextRequest = nextLinkExtractor.getNextLinkRequest(response);
@@ -531,17 +568,22 @@ public class RestRequest {
         var response = sendRequest(request, queryBuilder.skipLimiter);
         responseCounter.labels(Integer.toString(response.statusCode()), Boolean.toString(false)).inc();
         if (response.statusCode() >= 400) {
-            throw new UncheckedRestException(response.statusCode());
+            var responseJSONValue = JSON.parse(response.body());
+            if (responseJSONValue.contains("message")) {
+                throw new UncheckedRestException(responseJSONValue.get("message").asString(), response.statusCode(), response.request());
+            } else {
+                throw new UncheckedRestException(response.statusCode(), response.request());
+            }
         }
         return response.body();
     }
 
     public QueryBuilder get(String endpoint) {
-        return new QueryBuilder(RequestType.GET, endpoint);
+        return new QueryBuilder(RequestType.GET, endpoint).failOnEmptyResponse(true);
     }
 
     public QueryBuilder get() {
-        return get(null);
+        return get(null).failOnEmptyResponse(true);
     }
 
     public QueryBuilder post(String endpoint) {

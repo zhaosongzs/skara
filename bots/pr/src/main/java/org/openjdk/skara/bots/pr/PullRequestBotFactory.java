@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -161,8 +161,11 @@ public class PullRequestBotFactory implements BotFactory {
                 issueProjectToIssuePRMapMap.putIfAbsent(issueProject, new ConcurrentHashMap<>());
                 botBuilder.issuePRMap(issueProjectToIssuePRMapMap.get(issueProject));
             }
-            if (repo.value().contains("ignorestale")) {
-                botBuilder.ignoreStaleReviews(repo.value().get("ignorestale").asBoolean());
+            if (repo.value().contains("useStaleReviews")) {
+                botBuilder.useStaleReviews(repo.value().get("useStaleReviews").asBoolean());
+            }
+            if (repo.value().contains("acceptSimpleMerges")) {
+                botBuilder.acceptSimpleMerges(repo.value().get("acceptSimpleMerges").asBoolean());
             }
             if (repo.value().contains("targetbranches")) {
                 botBuilder.allowedTargetBranches(repo.value().get("targetbranches").asString());
@@ -205,7 +208,22 @@ public class PullRequestBotFactory implements BotFactory {
                 botBuilder.reviewCleanBackport(repo.value().get("reviewCleanBackport").asBoolean());
             }
             if (repo.value().contains("reviewMerge")) {
-                botBuilder.reviewMerge(repo.value().get("reviewMerge").asBoolean());
+                MergePullRequestReviewConfiguration result = null;
+
+                var val = repo.value().get("reviewMerge").asString().toLowerCase().trim();
+                if (val.equals("always")) {
+                    result = MergePullRequestReviewConfiguration.ALWAYS;
+                } else if (val.equals("never")) {
+                    result = MergePullRequestReviewConfiguration.NEVER;
+                } else if (val.equals("jcheck")) {
+                    result = MergePullRequestReviewConfiguration.JCHECK;
+                } else {
+                    throw new RuntimeException("Unexpected value for key \"reviewMerge\": '" +
+                                               repo.value().get("reviewMerge") + "', " +
+                                               "expected one of \"always\", \"never\" or \"jcheck\"");
+                }
+
+                botBuilder.reviewMerge(result);
             }
             if (repo.value().contains("processPR")) {
                 botBuilder.processPR(repo.value().get("processPR").asBoolean());
@@ -224,6 +242,38 @@ public class PullRequestBotFactory implements BotFactory {
                 botBuilder.mergeSources(mergeSources);
             }
 
+            if (repo.value().contains("approval")) {
+                var approvalJSON = repo.value().get("approval");
+                String prefix = approvalJSON.contains("prefix") ? approvalJSON.get("prefix").asString() : "";
+                String request = approvalJSON.get("request").asString();
+                String approved = approvalJSON.get("approved").asString();
+                String rejected = approvalJSON.get("rejected").asString();
+                String documentLink = approvalJSON.get("documentLink").asString();
+                // default value is true
+                boolean approvalComment = !approvalJSON.contains("approvalComment") || approvalJSON.get("approvalComment").asBoolean();
+                //default value is maintainer approval
+                String approvalTerm = approvalJSON.contains("approvalTerm") ? approvalJSON.get("approvalTerm").asString() : "maintainer approval";
+                Approval approval = new Approval(prefix, request, approved, rejected, documentLink, approvalComment, approvalTerm);
+                if (approvalJSON.contains("branches")) {
+                    for (var branch : approvalJSON.get("branches").fields()) {
+                        approval.addBranchPrefix(Pattern.compile(branch.name()), branch.value().get("prefix").asString());
+                    }
+                }
+                botBuilder.approval(approval);
+            }
+
+            if (repo.value().contains("versionMismatchWarning")) {
+                botBuilder.versionMismatchWarning(repo.value().get("versionMismatchWarning").asBoolean());
+            }
+
+            if (repo.value().contains("cleanCommandEnabled")) {
+                botBuilder.cleanCommandEnabled(repo.value().get("cleanCommandEnabled").asBoolean());
+            }
+
+            if (repo.value().contains("checkContributorStatusForBackportCommand")) {
+                botBuilder.checkContributorStatusForBackportCommand(repo.value().get("checkContributorStatusForBackportCommand").asBoolean());
+            }
+
             var prBot = botBuilder.build();
             pullRequestBotMap.put(repository.name(), prBot);
             ret.add(prBot);
@@ -231,13 +281,13 @@ public class PullRequestBotFactory implements BotFactory {
 
         // Create a CSRIssueBot for each issueProject which associated with at least one csr enabled repository
         for (var issueProject : repositoriesForCSR.keySet()) {
-            ret.add(new CSRIssueBot(issueProject, repositoriesForCSR.get(issueProject), pullRequestBotMap,
+            ret.add(0, new CSRIssueBot(issueProject, repositoriesForCSR.get(issueProject), pullRequestBotMap,
                     issueProjectToIssuePRMapMap.get(issueProject)));
         }
 
         // Create an IssueBot for each issueProject
         for (var issueProject : issueProjectToIssuePRMapMap.keySet()) {
-            ret.add(new IssueBot(issueProject, repositories.get(issueProject), pullRequestBotMap,
+            ret.add(0, new IssueBot(issueProject, repositories.get(issueProject), pullRequestBotMap,
                     issueProjectToIssuePRMapMap.get(issueProject)));
         }
 

@@ -38,7 +38,8 @@ public class BotUtils {
     private static final Pattern issuePattern = Pattern.compile("^(?: \\* )?\\[(\\S+)]\\(.*\\): (.*$)", Pattern.MULTILINE);
 
     public static String escape(String s) {
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("@", "@<!---->");
     }
 
     /**
@@ -74,5 +75,9 @@ public class BotUtils {
         return issueMatcher.results()
                 .map(mo -> mo.group(1))
                 .collect(Collectors.toSet());
+    }
+
+    public static String preprocessCommandLine(String line) {
+        return line.replaceFirst("/skara\\s+", "/");
     }
 }

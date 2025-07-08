@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,12 +30,12 @@ import org.openjdk.skara.vcs.*;
 import org.openjdk.skara.vcs.openjdk.CommitMessageParsers;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertFirstCommentContains;
 import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertLastCommentContains;
 
 class BackportTests {
@@ -90,7 +90,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -100,7 +100,7 @@ class BackportTests {
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             author.pullRequest(pr.id());
@@ -111,7 +111,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -192,7 +192,7 @@ class BackportTests {
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
-            var backportComment = comments.get(0).body();
+            var backportComment = comments.get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -202,7 +202,7 @@ class BackportTests {
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             author.pullRequest(pr.id());
@@ -213,7 +213,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -296,7 +296,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -306,7 +306,7 @@ class BackportTests {
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             author.pullRequest(pr.id());
@@ -317,7 +317,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -385,7 +385,7 @@ class BackportTests {
 
             // Re-running the bot should not cause any more error comments
             TestBotRunner.runPeriodicItems(bot);
-            assertEquals(1, pr.comments().size());
+            assertEquals(2, pr.comments().size());
         }
     }
 
@@ -454,7 +454,7 @@ class BackportTests {
 
             // Re-running the bot should not cause any more error comments
             TestBotRunner.runPeriodicItems(bot);
-            assertEquals(1, pr.comments().size());
+            assertEquals(2, pr.comments().size());
         }
     }
 
@@ -526,7 +526,7 @@ class BackportTests {
 
             // Re-running the bot should not cause any more error comments
             TestBotRunner.runPeriodicItems(bot);
-            assertEquals(1, pr.comments().size());
+            assertEquals(2, pr.comments().size());
         }
     }
 
@@ -582,7 +582,7 @@ class BackportTests {
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
-            var backportComment = comments.get(0).body();
+            var backportComment = comments.get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -655,7 +655,7 @@ class BackportTests {
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
-            var backportComment = comments.get(0).body();
+            var backportComment = comments.get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + upstreamHash.hex() + " -->"));
             assertEquals(issue2Number + ": Another issue", pr.store().title());
@@ -726,7 +726,7 @@ class BackportTests {
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
-            var backportComment = comments.get(0).body();
+            var backportComment = comments.get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + upstreamHash.hex() + " -->"));
             assertEquals(issue2Number + ": Another issue", pr.store().title());
@@ -801,7 +801,7 @@ class BackportTests {
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
-            var backportComment = comments.get(0).body();
+            var backportComment = comments.get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + upstreamHash.hex() + " -->"));
             assertEquals(issue2Number + ": Another issue", pr.store().title());
@@ -863,11 +863,11 @@ class BackportTests {
 
             // The bot should reply with a backport message and that the PR is ready
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
             assertTrue(pr.store().labelNames().contains("ready"));
             assertTrue(pr.store().labelNames().contains("rfr"));
             assertTrue(pr.store().labelNames().contains("clean"));
@@ -882,7 +882,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -960,11 +960,11 @@ class BackportTests {
 
             // The bot should reply with a backport message and that the PR is ready
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
             assertTrue(pr.store().labelNames().contains("ready"));
             assertTrue(pr.store().labelNames().contains("rfr"));
             assertTrue(pr.store().labelNames().contains("clean"));
@@ -991,7 +991,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -1070,7 +1070,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1129,7 +1129,66 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
+            assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
+            assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
+            assertEquals(issue1Number + ": An issue", pr.store().title());
+            assertTrue(pr.store().labelNames().contains("backport"));
+        }
+    }
+
+    @Test
+    void caseInsensitive(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+            var censusBuilder = credentials.getCensusBuilder()
+                                           .addCommitter(author.forge().currentUser().id())
+                                           .addReviewer(integrator.forge().currentUser().id())
+                                           .addReviewer(reviewer.forge().currentUser().id());
+            var bot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(new HashMap<>())
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var releaseBranch = localRepo.branch(masterHash, "release");
+            localRepo.checkout(releaseBranch);
+            var newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, "hello");
+            localRepo.add(newFile);
+            var issue1 = credentials.createIssue(issues, "An issue");
+            var issue1Number = issue1.id().split("-")[1];
+            var originalMessage = issue1Number + ": An issue\n" +
+                                  "\n" +
+                                  "Reviewed-by: integrationreviewer2";
+            var releaseHash = localRepo.commit(originalMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(releaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+            // "backport" the new file to the master branch
+            localRepo.checkout(localRepo.defaultBranch());
+            var editBranch = localRepo.branch(masterHash, "edit");
+            localRepo.checkout(editBranch);
+            var newFile2 = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile2, "hello");
+            localRepo.add(newFile2);
+            var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "bacKporT" + releaseHash.hex());
+
+            // The bot should reply with a backport message
+            TestBotRunner.runPeriodicItems(bot);
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1188,7 +1247,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1247,7 +1306,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1257,7 +1316,7 @@ class BackportTests {
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             author.pullRequest(pr.id());
@@ -1268,7 +1327,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -1346,7 +1405,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("<!-- backport error -->"));
             assertTrue(backportComment.contains("the commit `" + releaseHash.hex() + "` does not refer to an issue"));
             assertFalse(pr.store().labelNames().contains("backport"));
@@ -1396,14 +1455,14 @@ class BackportTests {
             var pr = credentials.createPullRequest(author, "master", "edit",
                     "Backport " + "FOO-" + issue1.id().split("-")[1]);
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("does not match project"));
             assertFalse(pr.store().labelNames().contains("backport"));
 
             // Use bad issue ID
             pr.setTitle("Backport TEST-4711");
             TestBotRunner.runPeriodicItems(bot);
-            backportComment = pr.comments().get(1).body();
+            backportComment = pr.comments().get(2).body();
             assertTrue(backportComment.contains("does not exist in project"));
             assertFalse(pr.store().labelNames().contains("backport"));
 
@@ -1411,7 +1470,15 @@ class BackportTests {
             // Use the full issue ID
             pr.setTitle("Backport " + issue1.id());
             TestBotRunner.runPeriodicItems(bot);
-            backportComment = pr.comments().get(2).body();
+            backportComment = pr.comments().get(3).body();
+            assertTrue(backportComment.contains("This backport pull request has now been updated with the original issue"));
+            assertEquals(issue1Number + ": An issue", pr.store().title());
+            assertTrue(pr.store().labelNames().contains("backport"));
+
+            // Case insensitive
+            pr.setTitle("bAcKpoRT" + issue1.id());
+            TestBotRunner.runPeriodicItems(bot);
+            backportComment = pr.comments().get(4).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with the original issue"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
             assertTrue(pr.store().labelNames().contains("backport"));
@@ -1419,7 +1486,7 @@ class BackportTests {
             // Set the title without project name
             pr.setTitle("Backport " + issue1.id().split("-")[1]);
             TestBotRunner.runPeriodicItems(bot);
-            backportComment = pr.comments().get(3).body();
+            backportComment = pr.comments().get(5).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with the original issue"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
             assertTrue(pr.store().labelNames().contains("backport"));
@@ -1428,7 +1495,7 @@ class BackportTests {
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             var prAsCommitter = author.pullRequest(pr.id());
@@ -1439,7 +1506,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -1530,14 +1597,13 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
             assertTrue(pr.store().labelNames().contains("backport"));
             assertTrue(pr.store().labelNames().contains("clean"));
-            var mergeReadyComment = pr.comments().get(1).body();
-            assertTrue(mergeReadyComment.contains("This change now passes all *automated* pre-integration checks"));
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Update the PR title and use the hash from release2 instead
             pr.setTitle("Backport " + releaseHash2.hex());
@@ -1551,15 +1617,13 @@ class BackportTests {
             assertTrue(pr.store().labelNames().contains("backport"));
             // The backport is no longer clean as the release2 version of the change was different
             assertFalse(pr.store().labelNames().contains("clean"));
-            mergeReadyComment = pr.comments().get(1).body();
-            assertTrue(mergeReadyComment.contains("This change is no longer ready for integration - check the PR body for details"));
+            assertFirstCommentContains(pr, "This change is no longer ready for integration - check the PR body for details");
 
             // Approve PR and re-run bot
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            mergeReadyComment = pr.comments().get(1).body();
-            assertTrue(mergeReadyComment.contains("This change now passes all *automated* pre-integration checks"));
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             author.pullRequest(pr.id());
@@ -1570,7 +1634,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -1657,7 +1721,7 @@ class BackportTests {
 
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash2.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1668,7 +1732,7 @@ class BackportTests {
             // correct the Backport original commit Hash
             pr.setTitle("Backport "+releaseHash.hex());
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment2 = pr.comments().get(1).body();
+            var backportComment2 = pr.comments().get(2).body();
             assertTrue(backportComment2.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment2.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1680,7 +1744,7 @@ class BackportTests {
             var prAsReviewer = reviewer.pullRequest(pr.id());
             prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good");
             TestBotRunner.runPeriodicItems(bot);
-            assertLastCommentContains(pr, "This change now passes all *automated* pre-integration checks");
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
 
             // Integrate
             author.pullRequest(pr.id());
@@ -1691,7 +1755,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -1770,7 +1834,7 @@ class BackportTests {
 
             // The bot should reply with a backport message and that the PR is not ready
             TestBotRunner.runPeriodicItems(bot);
-            var backportComment = pr.comments().get(0).body();
+            var backportComment = pr.comments().get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1794,7 +1858,7 @@ class BackportTests {
             assertLastCommentContains(pr, "Pushed as commit");
 
             String hex = null;
-            var comment = pr.comments().get(pr.comments().size() - 1);
+            var comment = pr.comments().getLast();
             var lines = comment.body().split("\n");
             var pattern = Pattern.compile(".* Pushed as commit ([0-9a-z]{40}).*");
             for (var line : lines) {
@@ -1845,7 +1909,7 @@ class BackportTests {
             var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
 
             var confPath = localRepo.root().resolve(".jcheck/conf");
-            var defaultConf = Files.readString(confPath, StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(confPath);
             var newConf = defaultConf.replace("reviewers=1", """
                     lead=0
                     reviewers=2
@@ -1889,7 +1953,7 @@ class BackportTests {
             // The bot should reply with a backport message
             TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
-            var backportComment = comments.get(0).body();
+            var backportComment = comments.get(1).body();
             assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
             assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
             assertEquals(issue1Number + ": An issue", pr.store().title());
@@ -1902,7 +1966,7 @@ class BackportTests {
 
             pr.addComment("/reviewers 1");
             TestBotRunner.runPeriodicItems(bot);
-            assertTrue(pr.store().comments().get(1).body().contains("This change is no longer ready for integration - check the PR body for details."));
+            assertFirstCommentContains(pr, "This change is no longer ready for integration - check the PR body for details.");
             assertTrue(pr.store().body().contains("Change must be properly reviewed (2 reviews required"));
             assertFalse(pr.store().labelNames().contains("ready"));
 
@@ -1912,13 +1976,262 @@ class BackportTests {
             integratorPr.addReview(Review.Verdict.APPROVED, "LGTM");
 
             TestBotRunner.runPeriodicItems(bot);
-            assertTrue(pr.store().comments().get(1).body().contains("This change now passes all *automated* pre-integration checks."));
+            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks.");
             assertTrue(pr.store().labelNames().contains("ready"));
 
             pr.addComment("/reviewers 3");
             TestBotRunner.runPeriodicItems(bot);
-            assertTrue(pr.store().comments().get(1).body().contains("This change is no longer ready for integration - check the PR body for details."));
+            assertFirstCommentContains(pr, "This change is no longer ready for integration - check the PR body for details.");
             assertTrue(pr.store().body().contains("Change must be properly reviewed (3 reviews required"));
+            assertFalse(pr.store().labelNames().contains("ready"));
+        }
+    }
+
+    @Test
+    void cleanBackportWithCopyrightUpdate(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory(false)) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var bot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(new HashMap<>())
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+
+            // Initialize master branch
+            var newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, """
+                    /*
+                     * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+                     * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+                     */
+                     Line1
+                     Line2
+                     """);
+            localRepo.add(newFile);
+            var updateHash = localRepo.commit("initial", "Test", "test@test.test");
+            localRepo.push(updateHash, author.authenticatedUrl(), "master", true);
+
+            // Initialize release branch
+            var releaseBranch = localRepo.branch(masterHash, "release");
+            localRepo.checkout(releaseBranch);
+            newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, """
+                    /*
+                     * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+                     * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+                     */
+                     Line1
+                     Line2
+                     """);
+            localRepo.add(newFile);
+            var releaseHash = localRepo.commit("initial", "Test", "test@test.test");
+            localRepo.push(releaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+            // Update release branch
+            newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, """
+                    /*
+                     * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+                     * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+                     */
+                     Line1
+                     Line2
+                     Line3
+                     """);
+            localRepo.add(newFile);
+            var issue1 = credentials.createIssue(issues, "An issue");
+            var issue1Number = issue1.id().split("-")[1];
+            var originalMessage = issue1Number + ": An issue\n" +
+                    "\n" +
+                    "Reviewed-by: integrationreviewer2";
+            var updateReleaseHash = localRepo.commit(originalMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(updateReleaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+
+            // "backport" the new file to the master branch
+            localRepo.checkout(localRepo.defaultBranch());
+            var editBranch = localRepo.branch(updateHash, "edit");
+            localRepo.checkout(editBranch);
+            var newFile2 = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, """
+                    /*
+                     * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+                     * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+                     */
+                     Line1
+                     Line2
+                     Line3
+                     """);
+            localRepo.add(newFile2);
+            var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Backport " + updateReleaseHash.hex(), List.of());
+
+            // The bot should reply with a backport message
+            TestBotRunner.runPeriodicItems(bot);
+            var comments = pr.comments();
+            var backportComment = comments.get(1).body();
+            assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
+            assertTrue(backportComment.contains("<!-- backport " + updateReleaseHash.hex() + " -->"));
+            assertEquals(issue1Number + ": An issue", pr.store().title());
+            assertTrue(pr.store().labelNames().contains("backport"));
+            assertFalse(pr.store().body().contains(ReviewersCheck.DESCRIPTION), "Reviewer requirement found in pr body");
+            assertFalse(pr.store().body().contains(CheckRun.MSG_EMPTY_BODY), "Body not empty requirement found in pr body");
+
+            // The bot should have added the "clean" label
+            assertTrue(pr.store().labelNames().contains("clean"));
+        }
+    }
+
+
+    @Test
+    void incompleteBackport(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory(false)) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var bot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(new HashMap<>())
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var releaseBranch = localRepo.branch(masterHash, "release");
+            localRepo.checkout(releaseBranch);
+            var newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, "hello");
+            localRepo.add(newFile);
+            var issue1 = credentials.createIssue(issues, "An issue");
+            var issue1Number = issue1.id().split("-")[1];
+            var originalMessage = issue1Number + ": An issue\n" +
+                    "\n" +
+                    "Reviewed-by: integrationreviewer2";
+            var releaseHash = localRepo.commit(originalMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(releaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+            // "backport" the new file to the master branch
+            localRepo.checkout(localRepo.defaultBranch());
+            var editBranch = localRepo.branch(masterHash, "edit");
+            localRepo.checkout(editBranch);
+            var newFile2 = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile2, "hello");
+            localRepo.add(newFile2);
+            var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Backport " + releaseHash.hex(), List.of());
+            // Force the pr to return incomplete diff
+            pr.setReturnCompleteDiff(false);
+
+            // The bot should reply with a backport message
+            TestBotRunner.runPeriodicItems(bot);
+            var comments = pr.comments();
+            var backportComment = comments.get(1).body();
+            assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
+            assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
+            assertEquals(issue1Number + ": An issue", pr.store().title());
+            assertTrue(pr.store().labelNames().contains("backport"));
+            assertLastCommentContains(pr, "This backport pull request is too large to be automatically evaluated as clean.");
+
+            // The bot should not have added the "clean" label
+            assertFalse(pr.store().labelNames().contains("clean"));
+        }
+    }
+
+    @Test
+    void cleanBackportWithProblemListIssue(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory(false)) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var bot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(new HashMap<>())
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(),
+                    Path.of("appendable.txt"), Set.of("author", "reviewers", "whitespace", "problemlists"), "0.1");
+
+            // Add problemlists configuration to conf
+            var checkConf = tempFolder.path().resolve(".jcheck/conf");
+            Files.writeString(checkConf, "\n[checks \"problemlists\"]\n", StandardOpenOption.APPEND);
+            Files.writeString(checkConf, "dirs=test/jdk\n", StandardOpenOption.APPEND);
+            // Create ProblemList.txt
+            Files.createDirectories(tempFolder.path().resolve("test/jdk"));
+            var problemList = tempFolder.path().resolve("test/jdk/ProblemList.txt");
+            Files.writeString(problemList, "test 1 windows-all", StandardOpenOption.CREATE);
+            localRepo.add(tempFolder.path().resolve(".jcheck/conf"));
+            localRepo.add(problemList);
+            localRepo.commit("add problemList.txt", "testauthor", "ta@none.none");
+
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var releaseBranch = localRepo.branch(masterHash, "release");
+            localRepo.checkout(releaseBranch);
+            var newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, "hello");
+            localRepo.add(newFile);
+            var issue1 = credentials.createIssue(issues, "An issue");
+            var issue1Number = issue1.id().split("-")[1];
+            var originalMessage = issue1Number + ": An issue\n" +
+                    "\n" +
+                    "Reviewed-by: integrationreviewer2";
+            var releaseHash = localRepo.commit(originalMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(releaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+            // "backport" the new file to the master branch
+            localRepo.checkout(localRepo.defaultBranch());
+            var editBranch = localRepo.branch(masterHash, "edit");
+            localRepo.checkout(editBranch);
+            var newFile2 = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile2, "hello");
+            localRepo.add(newFile2);
+            var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Backport " + releaseHash.hex(), List.of());
+
+            // The bot should reply with a backport message
+            TestBotRunner.runPeriodicItems(bot);
+            // Should be marked as ready for review
+            assertTrue(pr.store().labelNames().contains("rfr"));
+            // Shouldn't be marked as ready
             assertFalse(pr.store().labelNames().contains("ready"));
         }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -300,7 +300,7 @@ public class GitHubHost implements Forge {
             }
             log.fine("Searching too fast - waiting");
             try {
-                Thread.sleep(Duration.ofMillis(500).toMillis());
+                Thread.sleep(Duration.ofMillis(500));
             } catch (InterruptedException ignored) {
             }
         }
@@ -323,7 +323,7 @@ public class GitHubHost implements Forge {
     @Override
     public Optional<HostUser> user(String username) {
         var details = request.get("users/" + URLEncoder.encode(username, StandardCharsets.UTF_8))
-                             .onError(r -> Optional.of(JSON.of()))
+                             .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.of()) : Optional.empty())
                              .execute();
         if (details.isNull()) {
             return Optional.empty();
@@ -332,16 +332,69 @@ public class GitHubHost implements Forge {
         return Optional.of(toHostUser(details.asObject()));
     }
 
-    private HostUser toHostUser(JSONObject details) {
+    @Override
+    public Optional<HostUser> userById(String id) {
+        var details = request.get("user/" + id)
+                .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.of()) : Optional.empty())
+                .execute();
+        if (details.isNull()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(toHostUser(details.asObject()));
+    }
+
+    /**
+     * Gets all members of a GitHub organization.
+     */
+    @Override
+    public List<HostUser> groupMembers(String group) {
+        var result = request.get("orgs/" + group + "/members").execute();
+        return result.stream().map(o -> toHostUser(o.asObject())).toList();
+    }
+
+    /**
+     * Gets the membership state of a user in a GitHub organization. Since
+     * member invitations need to be accepted by the user, it can be either
+     * PENDING or ACTIVE. If the user isn't a member, the state is MISSING.
+     */
+    @Override
+    public MemberState groupMemberState(String group, HostUser user) {
+        var result = request.get("orgs/" + group + "/memberships/" + user.username())
+                .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.object().put("state", "missing")) : Optional.empty())
+                .execute();
+        var state = result.get("state").asString();
+        return switch (state) {
+            case "active" -> MemberState.ACTIVE;
+            case "pending" -> MemberState.PENDING;
+            case "missing" -> MemberState.MISSING;
+            default -> throw new IllegalStateException("Unknown state: " + state);
+        };
+    }
+
+    /**
+     * Adds a user to a GitHub organization. This will put the user as PENDING
+     * and an invitation is sent to the user. When accepted, the user becomes
+     * ACTIVE.
+     */
+    @Override
+    public void addGroupMember(String group, HostUser user) {
+        request.put("orgs/" + group + "/memberships/" + user.username())
+                .body("role", "member")
+                .execute();
+    }
+
+    /**
+     * Generate a HostUser object from the json snippet. Depending on the source,
+     * not all fields may be present.
+     */
+    static HostUser toHostUser(JSONObject details) {
         // Always present
         var login = details.get("login").asString();
         var id = details.get("id").asInt();
-
-        var name = details.get("name").asString();
-        if (name == null) {
-            name = login;
-        }
-        var email = details.get("email").asString();
+        // Sometimes present
+        var name = details.contains("name") ? details.get("name").asString() : login;
+        var email = details.contains("email") ? details.get("email").asString() : null;
         return HostUser.builder()
                        .id(id)
                        .username(login)
@@ -390,23 +443,41 @@ public class GitHubHost implements Forge {
     }
 
     @Override
-    public Optional<HostedCommit> search(Hash hash, boolean includeDiffs) {
+    public Optional<String> search(Hash hash, boolean includeDiffs) {
         var orgsToSearch = orgs.stream().map(o -> "org:" + o).collect(Collectors.joining(" "));
         if (!orgsToSearch.isEmpty()) {
             orgsToSearch = " " + orgsToSearch;
         }
+        // /search/commits can only find commits in default branch of each repository
         var result = runSearch("commits", "hash:" + hash.hex() + orgsToSearch);
         var items = result.get("items").asArray();
-        if (items.isEmpty()) {
-            return Optional.empty();
+        if (!items.isEmpty()) {
+            // When searching for a commit, there may be hits in multiple repositories.
+            // There is no good way of knowing for sure which repository we would rather
+            // get the commit from, but a reasonable default is to go by the shortest
+            // name as that is most likely the main repository of the project.
+            return items.stream()
+                    .map(o -> o.get("repository").get("full_name").asString())
+                    .min(Comparator.comparing(String::length));
         }
-        // When searching for a commit, there may be hits in multiple repositories.
-        // There is no good way of knowing for sure which repository we would rather
-        // get the commit from, but a reasonable default is to go by the shortest
-        // name as that is most likely the main repository of the project.
-        var shortestName = items.stream()
-                .map(o -> o.get("repository").get("full_name").asString())
-                .min(Comparator.comparing(String::length));
-        return shortestName.flatMap(this::repository).flatMap(r -> r.commit(hash, includeDiffs));
+
+        // If the commit is not found using /search/commits, try to locate it in each repository
+        for (var org : orgs) {
+            var repoNames = request.get("orgs/" + org + "/repos")
+                    .execute()
+                    .stream()
+                    .sorted(Comparator.comparing(o -> o.get("full_name").asString().length()))
+                    .map(o -> o.get("full_name").asString())
+                    .toList();
+
+            for (var repoName : repoNames) {
+                var githubRepo = new GitHubRepository(this, repoName);
+                if (githubRepo.commit(hash).isPresent()) {
+                    return Optional.of(repoName);
+                }
+            }
+        }
+
+        return Optional.empty();
     }
 }

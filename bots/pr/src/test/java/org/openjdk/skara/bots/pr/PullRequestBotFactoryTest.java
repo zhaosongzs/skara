@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -122,9 +122,10 @@ class PullRequestBotFactoryTest {
                             "integrator2"
                           ],
                           "reviewCleanBackport": true,
-                          "reviewMerge": true,
+                          "reviewMerge": "always",
                           "processPR": false,
-                          "jcheckMerge": true
+                          "jcheckMerge": true,
+                          "versionMismatchWarning": false,
                         },
                         "repo7": {
                           "census": "census:master",
@@ -141,9 +142,21 @@ class PullRequestBotFactoryTest {
                             "integrator2"
                           ],
                           "reviewCleanBackport": true,
-                          "reviewMerge": true,
+                          "reviewMerge": "always",
                           "processPR": false,
                           "jcheckMerge": false
+                          "approval": {
+                            "request": "-critical-request",
+                            "approved": "-critical-approved",
+                            "rejected": "-critical-rejected",
+                            "documentLink": "https://example.com",
+                            "branches": {
+                              "jdk20.0.1": { "prefix": "CPU23_04" },
+                              "jdk20.0.2": { "prefix": "CPU23_05" },
+                              }
+                          },
+                          "versionMismatchWarning": true,
+                          "cleanCommandEnabled": false,
                         }
                       },
                       "forks": {
@@ -195,6 +208,8 @@ class PullRequestBotFactoryTest {
             assertTrue(pullRequestBot5.enableMerge());
             assertFalse(pullRequestBot5.jcheckMerge());
             assertTrue(pullRequestBot5.enableBackport());
+            assertFalse(pullRequestBot5.versionMismatchWarning());
+            assertTrue(pullRequestBot5.cleanCommandEnabled());
 
             var pullRequestBot6 = (PullRequestBot) bots.stream()
                     .filter(bot -> bot.toString().equals("PullRequestBot@repo6"))
@@ -208,24 +223,28 @@ class PullRequestBotFactoryTest {
             assertEquals("{test=Signature needs verify}", pullRequestBot6.blockingCheckLabels().toString());
             assertEquals("[rfr]", pullRequestBot6.twoReviewersLabels().toString());
             assertEquals("[24h_test]", pullRequestBot6.twentyFourHoursLabels().toString());
-            assertFalse(pullRequestBot6.ignoreStaleReviews());
+            assertTrue(pullRequestBot6.useStaleReviews());
             assertEquals(".*", pullRequestBot6.allowedTargetBranches().toString());
             var integrators = pullRequestBot6.integrators();
             assertEquals(2, integrators.size());
             assertTrue(integrators.contains("integrator1"));
             assertTrue(integrators.contains("integrator2"));
             assertTrue(pullRequestBot6.reviewCleanBackport());
-            assertTrue(pullRequestBot6.reviewMerge());
+            assertEquals(MergePullRequestReviewConfiguration.ALWAYS, pullRequestBot6.reviewMerge());
             assertEquals("mlbridge[bot]", pullRequestBot6.mlbridgeBotName());
             assertTrue(pullRequestBot6.enableMerge());
             assertTrue(pullRequestBot6.jcheckMerge());
             assertTrue(pullRequestBot6.enableBackport());
+            assertFalse(pullRequestBot6.versionMismatchWarning());
 
             var pullRequestBot7 = (PullRequestBot) bots.stream()
                     .filter(bot -> bot.toString().equals("PullRequestBot@repo7"))
                     .findFirst().orElseThrow();
             assertEquals("PullRequestBot@repo7", pullRequestBot7.toString());
             assertFalse(pullRequestBot7.jcheckMerge());
+            assertEquals("https://example.com", pullRequestBot7.approval().documentLink());
+            assertTrue(pullRequestBot7.versionMismatchWarning());
+            assertFalse(pullRequestBot7.cleanCommandEnabled());
 
             var csrIssueBot1 = (CSRIssueBot) bots.stream()
                     .filter(bot -> bot.toString().equals("CSRIssueBot@TEST"))

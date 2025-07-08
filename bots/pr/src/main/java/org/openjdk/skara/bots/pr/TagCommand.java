@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -69,10 +69,7 @@ public class TagCommand implements CommandHandler {
                 return;
             }
             if (censusInstance.contributor(command.user()).isEmpty()) {
-                reply.println("To use the `/tag` command, you need to be in the OpenJDK [census](https://openjdk.org/census)"
-                        + " and your GitHub account needs to be linked with your OpenJDK username"
-                        + " ([how to associate your GitHub account with your OpenJDK username]"
-                        + "(https://wiki.openjdk.org/display/skara#Skara-AssociatingyourGitHubaccountandyourOpenJDKusername)).");
+                printInvalidUserWarning(bot, reply);
                 return;
             }
 
@@ -94,6 +91,7 @@ public class TagCommand implements CommandHandler {
             var localRepo = bot.hostedRepositoryPool()
                                .orElseThrow(() -> new IllegalStateException("Missing repository pool for PR bot"))
                                .materialize(bot.repo(), localRepoDir);
+            localRepo.fetch(bot.repo().authenticatedUrl(), commit.hash().toString(), true).orElseThrow();
 
             var existingTagNames = localRepo.tags().stream().map(Tag::name).collect(Collectors.toSet());
             if (existingTagNames.contains(tagName)) {
@@ -115,7 +113,8 @@ public class TagCommand implements CommandHandler {
             var contributor = censusInstance.contributor(command.user()).orElseThrow();
             var email = contributor.username() + "@" + domain;
             var message = "Added tag " + tagName + " for changeset " + commit.hash().abbreviate();
-            var tag = localRepo.tag(commit.hash(), tagName, message, contributor.username(), email);
+            var name = contributor.fullName().isPresent() ? contributor.fullName().get() : contributor.username();
+            var tag = localRepo.tag(commit.hash(), tagName, message, name, email);
             localRepo.push(tag, bot.repo().authenticatedUrl(), false);
             reply.println("The tag [" + tag.name() + "](" + bot.repo().webUrl(tag) + ") was successfully created.");
         } catch (IOException e) {

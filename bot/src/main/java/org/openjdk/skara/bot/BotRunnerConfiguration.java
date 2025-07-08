@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@ import org.openjdk.skara.vcs.VCS;
 
 import java.io.*;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.Duration;
 import java.util.*;
@@ -85,7 +84,7 @@ public class BotRunnerConfiguration {
                 if (github.contains("app")) {
                     var keyFile = cwd.resolve(github.get("app").get("key").asString());
                     try {
-                        var keyContents = Files.readString(keyFile, StandardCharsets.UTF_8);
+                        var keyContents = Files.readString(keyFile);
                         var pat = new Credential(github.get("app").get("id").asString() + ";" +
                                 github.get("app").get("installation").asString(),
                                 keyContents);
@@ -264,6 +263,14 @@ public class BotRunnerConfiguration {
                 } catch (ConfigurationError configurationError) {
                     throw new RuntimeException("Couldn't find repository with name: " + name, configurationError);
                 }
+            }
+
+            @Override
+            public IssueTracker issueTracker(String name) {
+                if (!issueHosts.containsKey(name)) {
+                    throw new RuntimeException("Couldn't find issue tracker with name: " + name);
+                }
+                return issueHosts.get(name);
             }
 
             @Override

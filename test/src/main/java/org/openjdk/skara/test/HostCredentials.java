@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -74,7 +74,7 @@ public class HostCredentials implements AutoCloseable {
             var apps = config.get("apps").asArray();
             var key = configDir.resolve(apps.get(userIndex).get("key").asString());
             try {
-                var keyContents = Files.readString(key, StandardCharsets.UTF_8);
+                var keyContents = Files.readString(key);
                 var pat = new Credential(apps.get(userIndex).get("id").asString() + ";" +
                                                  apps.get(userIndex).get("installation").asString(),
                                          keyContents);
@@ -197,7 +197,7 @@ public class HostCredentials implements AutoCloseable {
             } else {
                 hosts.add(TestHost.createFromExisting(hosts.get(0), userIndex));
             }
-            return hosts.get(hosts.size() - 1);
+            return hosts.getLast();
         }
 
         @Override
@@ -290,7 +290,7 @@ public class HostCredentials implements AutoCloseable {
             }
 
             if (Files.exists(lockFile)) {
-                var currentLock = Files.readString(lockFile, StandardCharsets.UTF_8).strip();
+                var currentLock = Files.readString(lockFile).strip();
                 var lockTime = ZonedDateTime.parse(currentLock, DateTimeFormatter.ISO_DATE_TIME);
                 if (lockTime.isBefore(ZonedDateTime.now().minus(Duration.ofMinutes(10)))) {
                     log.info("Stale lock encountered - overwriting it");
@@ -324,7 +324,7 @@ public class HostCredentials implements AutoCloseable {
 
     public Hash commitLock(Repository localRepo) throws IOException {
         var lockFile = localRepo.root().resolve("lock.txt");
-        Files.writeString(lockFile, ZonedDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME), StandardCharsets.UTF_8);
+        Files.writeString(lockFile, ZonedDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME));
         localRepo.add(lockFile);
         var lockHash = localRepo.commit("Lock", "test", "test@test.test");
         localRepo.branch(lockHash, "testlock");
@@ -355,7 +355,7 @@ public class HostCredentials implements AutoCloseable {
                     throw e;
                 }
                 try {
-                    Thread.sleep(Duration.ofSeconds(1).toMillis());
+                    Thread.sleep(Duration.ofSeconds(1));
                     retryCount++;
                 } catch (InterruptedException ignored) {
                 }

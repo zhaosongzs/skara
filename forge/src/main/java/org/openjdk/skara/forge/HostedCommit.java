@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,14 +31,23 @@ import java.time.format.*;
 
 public class HostedCommit extends Commit {
     private final URI url;
+    private final URI webUrl;
 
     public HostedCommit(CommitMetadata metadata, List<Diff> parentDiffs, URI url) {
+        this(metadata, parentDiffs, url, url);
+    }
+    public HostedCommit(CommitMetadata metadata, List<Diff> parentDiffs, URI url, URI webUrl) {
         super(metadata, parentDiffs);
         this.url = url;
+        this.webUrl = webUrl;
     }
 
     public URI url() {
         return url;
+    }
+
+    public URI webUrl() {
+        return webUrl;
     }
 
     @Override
@@ -53,11 +62,10 @@ public class HostedCommit extends Commit {
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof HostedCommit)) {
+        if (!(o instanceof HostedCommit other)) {
             return false;
         }
 
-        var other = (HostedCommit) o;
         return Objects.equals(url, other.url);
     }
 }

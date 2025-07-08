@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -178,6 +178,11 @@ public class GitRepository implements Repository {
     @Override
     public Commits commits(int n, boolean reverse) throws IOException {
         return new GitCommits(dir, "--all", reverse, n);
+    }
+
+    @Override
+    public Commits commits(List<Hash> reachableFrom, List<Hash> unreachableFrom) throws IOException {
+        return new GitCommits(dir, reachableFrom, unreachableFrom);
     }
 
     @Override
@@ -478,16 +483,17 @@ public class GitRepository implements Repository {
     public Repository reinitialize() throws IOException {
         cachedRoot = null;
 
-        Files.walk(dir)
-             .map(Path::toFile)
-             .sorted(Comparator.reverseOrder())
-             .forEach(File::delete);
+        try (var paths = Files.walk(dir)) {
+            paths.map(Path::toFile)
+                 .sorted(Comparator.reverseOrder())
+                 .forEach(File::delete);
+        }
 
         return init();
     }
 
     @Override
-    public Hash fetch(URI uri, String refspec, boolean includeTags, boolean forceUpdateTags) throws IOException {
+    public Optional<Hash> fetch(URI uri, String refspec, boolean includeTags, boolean forceUpdateTags) throws IOException {
         var cmd = new ArrayList<String>();
         cmd.addAll(List.of("git", "fetch", "--recurse-submodules=on-demand"));
         if (includeTags) {
@@ -502,7 +508,7 @@ public class GitRepository implements Repository {
         cmd.add(refspec);
         try (var p = capture(cmd)) {
             await(p);
-            return resolve("FETCH_HEAD").orElseThrow();
+            return resolve("FETCH_HEAD");
         }
     }
 
@@ -644,6 +650,13 @@ public class GitRepository implements Repository {
         var refspec = force ? "+" : "";
         refspec += "refs/tags/" + tag.name() + ":refs/tags/" + tag.name();
 
+        try (var p = capture("git", "push", uri.toString(), refspec)) {
+            await(p);
+        }
+    }
+
+    @Override
+    public void push(String refspec, URI uri) throws IOException {
         try (var p = capture("git", "push", uri.toString(), refspec)) {
             await(p);
         }
@@ -987,6 +1000,17 @@ public class GitRepository implements Repository {
                             .environ(currentEnv)
                             .execute()) {
             await(p);
+        }
+    }
+
+    @Override
+    public boolean isRemergeDiffEmpty(Hash mergeCommitHash) throws IOException {
+        // requires git 2.36 or newer
+        try (var p = Process.capture("git", "show", "--remerge-diff", "--format=%b", mergeCommitHash.hex())
+                .workdir(dir)
+                .environ(currentEnv)
+                .execute()) {
+            return String.join("", await(p).stdout()).isEmpty();
         }
     }
 
@@ -1687,6 +1711,16 @@ public class GitRepository implements Repository {
     }
 
     @Override
+    public int commitCount(List<Branch> branches) throws IOException {
+        var args = new ArrayList<String>();
+        args.addAll(List.of("git", "rev-list", "--count"));
+        args.addAll(branches.stream().map(Branch::name).toList());
+        try (var p = capture(args)) {
+            return Integer.parseInt(await(p).stdout().getFirst());
+        }
+    }
+
+    @Override
     public Hash initialHash() {
         return EMPTY_TREE;
     }
@@ -1709,7 +1743,7 @@ public class GitRepository implements Repository {
     public Commit staged() throws IOException {
         var author = new Author(username().orElse("jcheck"), email().orElse("jcheck@none.none"));
         var commitMetaData = new CommitMetadata(new Hash("staged"), List.of(head()), author, ZonedDateTime.now(),
-                author, ZonedDateTime.now(), List.of(""));
+                author, ZonedDateTime.now(), List.of("Fake commit message for staged"));
         return new Commit(commitMetaData, List.of(diffStaged()));
     }
 
@@ -1720,7 +1754,7 @@ public class GitRepository implements Repository {
     public Commit workingTree() throws IOException {
         var author = new Author(username().orElse("jcheck"), email().orElse("jcheck@none.none"));
         var commitMetaData = new CommitMetadata(new Hash("working-tree"), List.of(head()), author, ZonedDateTime.now(),
-                author, ZonedDateTime.now(), List.of(""));
+                author, ZonedDateTime.now(), List.of("Fake commit message for working-tree"));
         return new Commit(commitMetaData, List.of(diff(head())));
     }
 
@@ -1762,5 +1796,45 @@ public class GitRepository implements Repository {
             }
             return true;
         }
+    }
+
+    @Override
+    public void addNote(Hash hash,
+                        List<String> lines,
+                        String authorName,
+                        String authorEmail,
+                        String committerName,
+                        String committerEmail) throws IOException {
+        var existing = notes(hash);
+        if (!existing.isEmpty()) {
+            throw new IllegalStateException("A note already exists for " + hash.hex());
+        }
+
+        var cmd = Process.capture("git", "notes", "add", "-m", String.join("\n", lines), hash.hex())
+                         .workdir(dir)
+                         .environ(currentEnv)
+                         .environ("GIT_AUTHOR_NAME", authorName)
+                         .environ("GIT_AUTHOR_EMAIL", authorEmail)
+                         .environ("GIT_COMMITTER_NAME", committerName)
+                         .environ("GIT_COMMITTER_EMAIL", committerEmail);
+        try (var p = cmd.execute()) {
+            await(p);
+        }
+    }
+
+    @Override
+    public List<String> notes(Hash hash) throws IOException {
+        try (var p = capture("git", "notes", "show", hash.hex())) {
+            var res = p.await();
+            if (res.status() != 0) {
+                return List.of();
+            }
+            return res.stdout();
+        }
+    }
+
+    @Override
+    public void pushNotes(URI uri) throws IOException {
+        push("refs/notes/*:refs/notes/*", uri);
     }
 }

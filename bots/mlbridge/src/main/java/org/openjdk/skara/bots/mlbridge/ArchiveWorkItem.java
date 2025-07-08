@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,9 @@ package org.openjdk.skara.bots.mlbridge;
 
 import java.util.logging.Level;
 import org.openjdk.skara.bot.WorkItem;
+import org.openjdk.skara.bots.common.BotUtils;
 import org.openjdk.skara.bots.common.CommandNameEnum;
+import org.openjdk.skara.bots.common.PullRequestConstants;
 import org.openjdk.skara.email.*;
 import org.openjdk.skara.forge.*;
 import org.openjdk.skara.host.HostUser;
@@ -96,7 +98,7 @@ class ArchiveWorkItem implements WorkItem {
             } catch (IOException e) {
                 log.info("Push to archive failed: " + e);
                 try {
-                    var remoteHead = localRepo.fetch(bot.archiveRepo().authenticatedUrl(), bot.archiveRef(), false);
+                    var remoteHead = localRepo.fetch(bot.archiveRepo().authenticatedUrl(), bot.archiveRef(), false).orElseThrow();
                     localRepo.rebase(remoteHead, bot.emailAddress().fullName().orElseThrow(), bot.emailAddress().address());
                     hash = localRepo.head();
                     log.info("Rebase successful -  new hash: " + hash);
@@ -123,7 +125,8 @@ class ArchiveWorkItem implements WorkItem {
         var filteredBody = new StringBuilder();
         boolean readingMultiLineCommandArgs = false;
         for (var line : body.split("\\R")) {
-            var commandMatcher = EXECUTION_COMMAND_PATTERN.getPattern().matcher(line);
+            var preprocessedLine = BotUtils.preprocessCommandLine(line);
+            var commandMatcher = EXECUTION_COMMAND_PATTERN.getPattern().matcher(preprocessedLine);
             if (commandMatcher.matches()) {
                 readingMultiLineCommandArgs = false;
                 var command = commandMatcher.group(1).toLowerCase();
@@ -142,10 +145,18 @@ class ArchiveWorkItem implements WorkItem {
 
     private boolean ignoreComment(HostUser author, String body, ZonedDateTime createdTime, ZonedDateTime lastDraftTime, boolean isComment) {
         if (pr.repository().forge().currentUser().equals(author)) {
-            return true;
+            if (pr.isOpen()) {
+                return !PullRequestConstants.READY_FOR_SPONSOR_MARKER_PATTERN.matcher(body).find();
+            } else {
+                return true;
+            }
         }
         if (bot.ignoredUsers().contains(author.username())) {
-            return true;
+            if (pr.isOpen()) {
+                return !PullRequestConstants.READY_FOR_SPONSOR_MARKER_PATTERN.matcher(body).find();
+            } else {
+                return true;
+            }
         }
 
         // Check if this comment only contains command lines
@@ -174,7 +185,7 @@ class ArchiveWorkItem implements WorkItem {
     private static final String webrevListMarker = "<!-- mlbridge webrev list -->";
 
     private void updateWebrevComment(List<Comment> comments, int index, List<WebrevDescription> webrevs) {
-        if (webrevs.stream().noneMatch(w -> w.uri() != null)) {
+        if (webrevs.stream().noneMatch(w -> (w.uri() != null || w.diffTooLarge()))) {
             return;
         }
         var existing = comments.stream()
@@ -182,8 +193,10 @@ class ArchiveWorkItem implements WorkItem {
                                .filter(comment -> comment.body().contains(WEBREV_COMMENT_MARKER))
                                .findAny();
         var webrevDescriptions = webrevs.stream()
-                                        .map(d -> String.format("[%s](%s)", d.label(), d.uri()))
-                                        .collect(Collectors.joining(" - "));
+                .map(d -> d.diffTooLarge() ?
+                        String.format("[%s](%s)", d.label(), "Webrev is not available because diff is too large") :
+                        String.format("[%s](%s)", d.label(), d.uri()))
+                .collect(Collectors.joining(" - "));
         var comment = WEBREV_COMMENT_MARKER + "\n";
         comment += webrevHeaderMarker + "\n";
         comment += "### Webrevs" + "\n";
@@ -363,7 +376,8 @@ class ArchiveWorkItem implements WorkItem {
             var localRepoPath = scratchPath.resolve("mlbridge-mergebase").resolve(pr.repository().name());
             var localRepo = PullRequestUtils.materialize(hostedRepositoryPool, pr, localRepoPath);
 
-            var webrevPath = scratchPath.resolve("mlbridge-webrevs");
+            var jsonWebrevPath = scratchPath.resolve("mlbridge-webrevs").resolve("json");
+            var htmlWebrevPath = scratchPath.resolve("mlbridge-webrevs").resolve("html");
             var listServer = MailingListServerFactory.createMailmanServer(bot.listArchive(), bot.smtpServer(), bot.sendInterval());
             var archiver = new ReviewArchive(pr, bot.emailAddress());
             var lastDraftTime = pr.lastMarkedAsDraftTime().orElse(null);
@@ -398,7 +412,7 @@ class ArchiveWorkItem implements WorkItem {
                 archiver.addReviewComment(reviewComment);
             }
 
-            var webrevGenerator = bot.webrevStorage().generator(pr, localRepo, webrevPath);
+            var webrevGenerator = bot.webrevStorage().generator(pr, localRepo, jsonWebrevPath, htmlWebrevPath, hostedRepositoryPool);
             var newMails = archiver.generateNewEmails(sentMails, bot.cooldown(), localRepo, bot.issueTracker(), jbs.toUpperCase(), webrevGenerator,
                                                       (index, webrevs) -> updateWebrevComment(comments, index, webrevs),
                                                       user -> getAuthorAddress(census, user),
@@ -422,7 +436,7 @@ class ArchiveWorkItem implements WorkItem {
             }
             bot.archiveRepo().writeFileContents(mboxFile(), newArchivedContents.toString(), new Branch(bot.archiveRef()),
                     "Adding comments for PR " + bot.codeRepo().name() + "/" + pr.id(),
-                    bot.emailAddress().fullName().orElseThrow(), bot.emailAddress().address());
+                    bot.emailAddress().fullName().orElseThrow(), bot.emailAddress().address(), archiveContents.isEmpty());
 
             // Finally post all new mails to the actual list
             for (var newMail : newMails) {

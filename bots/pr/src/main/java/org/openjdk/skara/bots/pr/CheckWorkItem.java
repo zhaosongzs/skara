@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,9 +31,12 @@ import org.openjdk.skara.forge.*;
 import org.openjdk.skara.host.HostUser;
 import org.openjdk.skara.issuetracker.Comment;
 import org.openjdk.skara.issuetracker.IssueTrackerIssue;
+import org.openjdk.skara.json.JSONValue;
+import org.openjdk.skara.vcs.Branch;
 import org.openjdk.skara.vcs.Hash;
 import org.openjdk.skara.vcs.Repository;
 import org.openjdk.skara.vcs.openjdk.CommitMessageParsers;
+import org.openjdk.skara.vcs.openjdk.Issue;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -45,16 +48,19 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-import static org.openjdk.skara.bots.common.PullRequestConstants.WEBREV_COMMENT_MARKER;
+import static org.openjdk.skara.bots.common.PullRequestConstants.*;
+import static org.openjdk.skara.bots.pr.CheckRun.MERGE_READY_MARKER;
+import static org.openjdk.skara.bots.pr.CheckRun.PLACEHOLDER_MARKER;
 import static org.openjdk.skara.forge.PullRequestUtils.mergeSourcePattern;
 
 class CheckWorkItem extends PullRequestWorkItem {
     private final Logger log = Logger.getLogger("org.openjdk.skara.bots.pr");
     static final Pattern ISSUE_ID_PATTERN = Pattern.compile("^(?:(?<prefix>[A-Za-z][A-Za-z0-9]+)-)?(?<id>[0-9]+)"
-            + "(?::(?<space>[\\s\u00A0\u2007\u202F]+)(?<title>.+))?$");
-    private static final Pattern BACKPORT_HASH_TITLE_PATTERN = Pattern.compile("^Backport\\s*([0-9a-z]{40})\\s*$");
-    private static final Pattern BACKPORT_ISSUE_TITLE_PATTERN = Pattern.compile("^Backport\\s*(?:(?<prefix>[A-Za-z][A-Za-z0-9]+)-)?(?<id>[0-9]+)\\s*$");
+            + "(?::?(?<space>[\\s\u00A0\u2007\u202F]+)(?<title>.+))?$");
+    private static final Pattern BACKPORT_HASH_TITLE_PATTERN = Pattern.compile("^Backport\\s*([0-9a-z]{40})\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BACKPORT_ISSUE_TITLE_PATTERN = Pattern.compile("^Backport\\s*(?:(?<prefix>[A-Za-z][A-Za-z0-9]+)-)?(?<id>[0-9]+)\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern METADATA_COMMENTS_PATTERN = Pattern.compile("<!-- (?:backport)|(?:(add|remove) (?:contributor|reviewer))|(?:summary: ')|(?:solves: ')|(?:additional required reviewers)|(?:jep: ')|(?:csr: ')");
     private static final String ELLIPSIS = "…";
     protected static final String FORCE_PUSH_MARKER = "<!-- force-push suggestion -->";
@@ -66,27 +72,61 @@ class CheckWorkItem extends PullRequestWorkItem {
 
     private final boolean forceUpdate;
     private final boolean spawnedFromIssueBot;
+    private final boolean initialRun;
     private final Map<String, Optional<IssueTrackerIssue>> issues = new HashMap<>();
 
-    CheckWorkItem(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt,
-                  boolean needsReadyCheck, boolean forceUpdate) {
-        super(bot, prId, errorHandler, triggerUpdatedAt, needsReadyCheck);
-        this.forceUpdate = forceUpdate;
-        this.spawnedFromIssueBot = false;
+    @Override
+    public boolean replaces(WorkItem other) {
+        if (!other.getClass().equals(this.getClass())) {
+            return false;
+        }
+        var otherCheckWorkItem = (CheckWorkItem) other;
+        return !concurrentWith(other) && this.forceUpdate == otherCheckWorkItem.forceUpdate
+                && this.initialRun == otherCheckWorkItem.initialRun
+                && this.spawnedFromIssueBot == otherCheckWorkItem.spawnedFromIssueBot;
     }
 
-    CheckWorkItem(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt,
-                  boolean needsReadyCheck, boolean forceUpdate, boolean spawnedFromIssueBot) {
+    private CheckWorkItem(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt,
+                          boolean needsReadyCheck, boolean forceUpdate, boolean spawnedFromIssueBot, boolean initialRun) {
         super(bot, prId, errorHandler, triggerUpdatedAt, needsReadyCheck);
         this.forceUpdate = forceUpdate;
         this.spawnedFromIssueBot = spawnedFromIssueBot;
+        this.initialRun = initialRun;
     }
 
-    CheckWorkItem(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt,
-                  boolean needsReadyCheck) {
-        super(bot, prId, errorHandler, triggerUpdatedAt, needsReadyCheck);
-        this.forceUpdate = false;
-        this.spawnedFromIssueBot = false;
+    /**
+     * Create CheckWorkItem spawned from CSRIssueWorkItem
+     */
+    public static CheckWorkItem fromCSRIssue(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt, boolean forceUpdate) {
+        return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, true, forceUpdate, true, false);
+    }
+
+    /**
+     * Create CheckWorkItem spawned from initial run of PullRequestBot
+     */
+    public static CheckWorkItem fromInitialRunOfPRBot(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt) {
+        return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, true, false, false, true);
+    }
+
+    /**
+     * Create CheckWorkItem spawned from PullRequestBot
+     */
+    public static CheckWorkItem fromPRBot(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt) {
+        return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, true, false, false, false);
+    }
+
+    /**
+     * Create CheckWorkItem spawned from IssueBot
+     */
+    public static CheckWorkItem fromIssueBot(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt) {
+        return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, true, false, true, false);
+    }
+
+    /**
+     * Create Normal CheckWorkItem
+     */
+    public static CheckWorkItem fromWorkItem(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt) {
+        return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, false, false, false, false);
     }
 
     private String encodeReviewer(HostUser reviewer, CensusInstance censusInstance) {
@@ -107,14 +147,14 @@ class CheckWorkItem extends PullRequestWorkItem {
 
     /**
      * Provides cached fetching of issues from the IssueTracker.
-     * @param id ID of issue to fetch
+     * @param shortId Short id of issue to fetch, e.g. the id of an issue is TEST-123, then the short id of the issue is 123
      * @return The issue if found, otherwise empty.
      */
-    Optional<IssueTrackerIssue> issueTrackerIssue(String id) {
-        if (!issues.containsKey(id)) {
-            issues.put(id, bot.issueProject().issue(id));
+    Optional<IssueTrackerIssue> issueTrackerIssue(String shortId) {
+        if (!issues.containsKey(shortId)) {
+            issues.put(shortId, bot.issueProject().issue(shortId));
         }
-        return issues.get(id);
+        return issues.get(shortId);
     }
 
     String getPRMetadata(CensusInstance censusInstance, String title, String body, List<Comment> comments,
@@ -132,11 +172,20 @@ class CheckWorkItem extends PullRequestWorkItem {
                                         .flatMap(comment -> comment.body().lines())
                                         .filter(line -> METADATA_COMMENTS_PATTERN.matcher(line).find())
                                         .collect(Collectors.joining());
+
+            // Webrev comment should trigger the update
             commentString = commentString + comments.stream()
                     .filter(comment -> comment.author().username().equals(bot.mlbridgeBotName()))
                     .flatMap(comment -> comment.body().lines())
                     .filter(line -> line.equals(WEBREV_COMMENT_MARKER))
                     .findFirst().orElse("");
+
+            // Touch command should trigger the update
+            commentString = commentString + comments.stream()
+                    .filter(comment -> comment.author().equals(pr.repository().forge().currentUser()))
+                    .flatMap(comment -> comment.body().lines())
+                    .filter(line -> line.contains(TOUCH_COMMAND_RESPONSE_MARKER))
+                    .collect(Collectors.joining());
 
             var labelString = labels.stream()
                                     .sorted()
@@ -165,6 +214,7 @@ class CheckWorkItem extends PullRequestWorkItem {
             }
             var issueIds = BotUtils.parseAllIssues(prBody);
             var issuesData = issueIds.stream()
+                    .map(i -> new Issue(i, "").shortId())
                     .sorted()
                     .map(this::issueTrackerIssue)
                     .filter(Optional::isPresent)
@@ -172,12 +222,25 @@ class CheckWorkItem extends PullRequestWorkItem {
                     .map(issue -> {
                         var issueData = new StringBuilder();
                         issueData.append(issue.id());
+                        issueData.append(issue.title());
                         issueData.append(issue.status());
                         issue.resolution().ifPresent(issueData::append);
                         var properties = issue.properties();
                         if (properties != null) {
                             issueData.append(properties.get("priority").asString());
                             issueData.append(properties.get("issuetype").asString());
+                            if (properties.get("fixVersions") != null) {
+                                issueData.append(properties.get("fixVersions").stream()
+                                        .map(JSONValue::asString)
+                                        .sorted()
+                                        .toList());
+                            }
+                        }
+                        if (bot.approval() != null && bot.approval().needsApproval(PreIntegrations.realTargetRef(pr))) {
+                            // Add a static sting to the metadata if the PR needs approval to force
+                            // update if this configuration has changed for the target branch.
+                            issueData.append("approval");
+                            issueData.append(String.join("", issue.labelNames()));
                         }
                         return issueData;
                     })
@@ -220,50 +283,54 @@ class CheckWorkItem extends PullRequestWorkItem {
                 String previousPRMetadata = substrings[0];
                 String previousIssueMetadata = (substrings.length > 1) ? substrings[1] : "";
 
-                // triggered by issue update
-                if (spawnedFromIssueBot) {
+                // triggered by issue update or initial run when bot restarts
+                if (initialRun || spawnedFromIssueBot) {
                     var currIssueMetadata = getIssueMetadata(pr.body());
                     if (expiresAt != null) {
                         if (previousIssueMetadata.equals(currIssueMetadata) && expiresAt.isAfter(Instant.now())) {
                             log.finer("[Issue]Metadata with expiration time is still valid, not checking again");
-                            return true;
                         } else {
                             log.finer("[Issue]Metadata expiration time has expired - checking again");
+                            return false;
                         }
                     } else {
                         if (previousIssueMetadata.equals(currIssueMetadata)) {
                             log.fine("[Issue]No activity since last check, not checking again.");
-                            return true;
                         } else {
                             log.fine("[Issue]Previous metadata: " + previousIssueMetadata + " - current: " + currIssueMetadata);
+                            return false;
                         }
                     }
-                    // triggered by pr updates
-                } else {
+                }
+                // triggered by pr updates
+                if (!spawnedFromIssueBot) {
                     var currPRMetadata = getPRMetadata(censusInstance, pr.title(), pr.body(), comments, reviews,
                             labels, pr.targetRef(), pr.isDraft());
                     if (expiresAt != null) {
                         if (previousPRMetadata.equals(currPRMetadata) && expiresAt.isAfter(Instant.now())) {
                             log.finer("[PR]Metadata with expiration time is still valid, not checking again");
-                            return true;
                         } else {
                             log.finer("[PR]Metadata expiration time has expired - checking again");
+                            return false;
                         }
                     } else {
                         if (previousPRMetadata.equals(currPRMetadata)) {
                             log.fine("[PR]No activity since last check, not checking again.");
-                            return true;
                         } else {
                             log.fine("[PR]Previous metadata: " + previousPRMetadata + " - current: " + currPRMetadata);
+                            return false;
                         }
                     }
                 }
             } else {
                 log.info("Check in progress was never finished - checking again");
+                return false;
             }
+        } else {
+            return false;
         }
 
-        return false;
+        return true;
     }
 
     /**
@@ -282,7 +349,8 @@ class CheckWorkItem extends PullRequestWorkItem {
      * @return true if the PR was modified
      */
     private boolean updateTitle() {
-        var m = ISSUE_ID_PATTERN.matcher(pr.title());
+        var oldPrTitle = pr.title();
+        var m = ISSUE_ID_PATTERN.matcher(oldPrTitle.trim());
         var project = bot.issueProject();
 
         if (m.matches() && project != null) {
@@ -300,10 +368,10 @@ class CheckWorkItem extends PullRequestWorkItem {
             var issue = issueTrackerIssue(id);
             if (issue.isPresent()) {
                 var issueTitle = issue.get().title();
+                var newPrTitle = id + ": " + issueTitle;
                 if (title.isEmpty()) {
                     // If the title is in the form of "[project-]<bugid>" only
                     // we add the title from JBS
-                    var newPrTitle = id + ": " + issueTitle;
                     pr.setTitle(newPrTitle);
                     return true;
                 } else {
@@ -313,14 +381,23 @@ class CheckWorkItem extends PullRequestWorkItem {
                         title = title.substring(0, title.length() - 1);
                     }
                     if (issueTitle.startsWith(title) && issueTitle.length() > title.length()) {
-                        var newPrTitle = id + ": " + issueTitle;
                         pr.setTitle(newPrTitle);
                         var remainingTitle = issueTitle.substring(title.length());
                         if (pr.body().startsWith(ELLIPSIS + remainingTitle + "\n\n")) {
-                            // Remove remaning title, plus decorations
+                            // Remove remaining title, plus decorations
                             var newPrBody = pr.body().substring(remainingTitle.length() + 3);
                             pr.setBody(newPrBody);
                         }
+                        return true;
+                    }
+                    // Automatically update PR title if it's not in canonical form
+                    if (title.equals(issueTitle) && !oldPrTitle.equals(newPrTitle)) {
+                        pr.setTitle(newPrTitle);
+                        return true;
+                    }
+                    // Automatically update PR title if titles are a relaxed match but not an exact match
+                    if (!title.equals(issueTitle) && CheckRun.relaxedEquals(title, issueTitle)) {
+                        pr.setTitle(newPrTitle);
                         return true;
                     }
                 }
@@ -337,10 +414,32 @@ class CheckWorkItem extends PullRequestWorkItem {
         return false;
     }
 
+    private boolean updateAdditionalIssuesTitle(List<Comment> comments) {
+        if (bot.issueProject() == null) {
+            return false;
+        }
+        var issueTitleUpdated = false;
+        var botUser = pr.repository().forge().currentUser();
+        var issues = SolvesTracker.currentSolved(botUser, comments, pr.title());
+        for (var issue : issues) {
+            var solvesComment = SolvesTracker.getLatestSolvesActionComment(botUser, comments, issue);
+            if (solvesComment.isPresent()) {
+                var issueTrackerIssue = issueTrackerIssue(issue.shortId());
+                if (issueTrackerIssue.isPresent() && !issue.description().equals(issueTrackerIssue.get().title())) {
+                    pr.updateComment(solvesComment.get().id(),
+                            solvesComment.get().body().replace(SolvesTracker.setSolvesMarker(issue),
+                                    SolvesTracker.setSolvesMarker(new Issue(issue.shortId(), issueTrackerIssue.get().title()))));
+                    issueTitleUpdated = true;
+                }
+            }
+        }
+        return issueTitleUpdated;
+    }
+
     private void initializeIssuePRMap() {
         // When bot restarts, the issuePRMap needs to get updated with this pr
-        var prRecord = new PRRecord(pr.repository().name(), prId);
         if (!bot.initializedPRs().containsKey(prId)) {
+            var prRecord = new PRRecord(pr.repository().name(), prId);
             var issueIds = BotUtils.parseAllIssues(pr.body());
             for (String issueId : issueIds) {
                 bot.addIssuePRMapping(issueId, prRecord);
@@ -360,6 +459,22 @@ class CheckWorkItem extends PullRequestWorkItem {
         var hostedRepositoryPool = new HostedRepositoryPool(seedPath);
         CensusInstance census;
         var comments = prComments();
+        comments = postPlaceholderForReadyComment(comments);
+
+        if (pr.headHash().hex() == null) {
+            String text = "The head hash of this pull request is missing. " +
+                    "Until this is resolved, this pull request cannot be processed." +
+                    "This is likely caused by a caching problem in the server " +
+                    "and can usually be worked around by pushing another commit to the pull request branch. " +
+                    "The commit can be empty. Example:\n" +
+                    "```bash\n" +
+                    "$ git commit --allow-empty -m \"Empty commit\"\n" +
+                    "$ git push\n" +
+                    "```\n" +
+                    "If the issue still exists, please notify Skara admins.";
+            addErrorComment(text, comments);
+            return List.of();
+        }
 
         try {
             census = CensusInstance.createCensusInstance(hostedRepositoryPool, bot.censusRepo(), bot.censusRef(), scratchArea.getCensus(), pr,
@@ -470,9 +585,11 @@ class CheckWorkItem extends PullRequestWorkItem {
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
-                var metadata = pr.repository().forge().search(hash);
-                if (metadata.isPresent()) {
-                    var message = CommitMessageParsers.v1.parse(metadata.get().message());
+                var forge = pr.repository().forge();
+                var repoName = forge.search(hash);
+                if (repoName.isPresent()) {
+                    var commit = forge.repository(repoName.get()).flatMap(repository -> repository.commit(hash));
+                    var message = CommitMessageParsers.v1.parse(commit.orElseThrow().message());
                     var issues = message.issues();
                     var comment = new ArrayList<String>();
                     if (issues.isEmpty()) {
@@ -484,7 +601,7 @@ class CheckWorkItem extends PullRequestWorkItem {
                         return List.of();
                     }
 
-                    var id = issues.get(0).id();
+                    var id = issues.get(0).shortId();
                     var issue = issueTrackerIssue(id);
                     if (!issue.isPresent()) {
                         var text = "<!-- backport error -->\n" +
@@ -496,6 +613,7 @@ class CheckWorkItem extends PullRequestWorkItem {
                     }
                     pr.setTitle(id + ": " + issue.get().title());
                     comment.add("<!-- backport " + hash.hex() + " -->\n");
+                    comment.add("<!-- repo " + repoName.get() + " -->\n");
                     for (var additionalIssue : issues.subList(1, issues.size())) {
                         comment.add(SolvesTracker.setSolvesMarker(additionalIssue));
                     }
@@ -511,19 +629,34 @@ class CheckWorkItem extends PullRequestWorkItem {
                     if (!summary.isEmpty()) {
                         text += " and summary";
                     }
-                    text += " from the original [commit](" + metadata.get().url() + ").";
+                    text += " from the original [commit](" + commit.get().url() + ").";
                     comment.add(text);
                     pr.addComment(String.join("\n", comment));
                     pr.addLabel("backport");
-                    return List.of(new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, false));
+                    return List.of(CheckWorkItem.fromWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
                 } else {
-                    var botUser = pr.repository().forge().currentUser();
                     var text = "<!-- backport error -->\n" +
                             ":warning: @" + pr.author().username() + " could not find any commit with hash `" +
                             hash.hex() + "`. Please update the title with the hash for an existing commit.";
                     addErrorComment(text, comments);
                     return List.of();
                 }
+            } else if (pr.title().equals("Merge")) {
+                // Update the PR title with the hash of the commit that will become the second parent
+                // of the final merge commit (the first parent is always the HEAD of the target branch).
+                var targetBranch = new Branch(pr.targetRef());
+                var targetBranchWebUrl = pr.repository().webUrl(targetBranch);
+                var secondParent = pr.headHash();
+                pr.setTitle("Merge " + secondParent.hex());
+                var comment = List.of(
+                    "<!-- merge parent " + secondParent.hex() + "-->\n",
+                    "The first parent of the resulting merge commit from this pull request will be set to the " +
+                    "upon integration current `HEAD` of the (" + targetBranch.name() + ")[" + targetBranchWebUrl + "] " +
+                    "branch. The second parent of the resulting merge commit from this pull request will be " +
+                    "set to `" + secondParent.hex() + "`."
+                );
+                pr.addComment(String.join("\n", comment));
+                return List.of(CheckWorkItem.fromWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
             }
 
             // Check for a title of the form Backport <issueid>
@@ -554,14 +687,20 @@ class CheckWorkItem extends PullRequestWorkItem {
                 var comment = pr.addComment(text);
                 pr.addLabel("backport");
                 logLatency("Time from PR updated to backport comment posted ", comment.createdAt(), log);
-                return List.of(new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, false));
+                return List.of(CheckWorkItem.fromWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
             }
 
             // If the title needs updating, we run the check again
             if (updateTitle()) {
                 var updatedPr = bot.repo().pullRequest(prId);
                 logLatency("Time from PR updated to title corrected ", updatedPr.updatedAt(), log);
-                return List.of(new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, false));
+                return List.of(CheckWorkItem.fromWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
+            }
+
+            if (updateAdditionalIssuesTitle(comments)) {
+                var updatedPr = bot.repo().pullRequest(prId);
+                logLatency("Time from PR updated to additional issue's title corrected ", updatedPr.updatedAt(), log);
+                return List.of(CheckWorkItem.fromWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
             }
 
             // Check force push
@@ -582,8 +721,8 @@ class CheckWorkItem extends PullRequestWorkItem {
                 Repository localRepo = materializeLocalRepo(scratchArea, hostedRepositoryPool);
 
                 var expiresAt = CheckRun.execute(this, pr, localRepo, comments, allReviews,
-                        activeReviews, labels, census, bot.ignoreStaleReviews(), bot.integrators(), bot.reviewCleanBackport(),
-                        bot.reviewMerge());
+                        activeReviews, labels, census, bot.useStaleReviews(), bot.integrators(), bot.reviewCleanBackport(),
+                        bot.reviewMerge(), bot.approval());
                 if (log.isLoggable(Level.INFO)) {
                     // Log latency from the original updatedAt of the PR when this WorkItem
                     // was triggered to when it was just updated by the CheckRun.execute above.
@@ -601,7 +740,7 @@ class CheckWorkItem extends PullRequestWorkItem {
             }
         }
 
-        if (pr.labelNames().contains("auto") && pr.labelNames().contains("ready")
+        if (pr.isOpen() && pr.labelNames().contains("auto") && pr.labelNames().contains("ready")
                 && !pr.labelNames().contains("sponsor") && !unhandledIntegrateCommand(comments)) {
             var comment = pr.addComment("/integrate\n" + PullRequestCommandWorkItem.VALID_BOT_COMMAND_MARKER);
             var autoAdded = pr.labelAddedAt("auto").orElseThrow();
@@ -647,6 +786,23 @@ class CheckWorkItem extends PullRequestWorkItem {
         return allCommands.stream()
                 .filter(ci -> ci.name().equals("integrate"))
                 .anyMatch(ci -> !handled.contains(ci.id()));
+    }
+
+    private List<Comment> postPlaceholderForReadyComment(List<Comment> comments) {
+        var existing = comments.stream()
+                .filter(comment -> comment.author().equals(pr.repository().forge().currentUser()))
+                .filter(comment -> comment.body().contains(MERGE_READY_MARKER))
+                .findAny();
+        if (existing.isPresent()) {
+            return comments;
+        }
+        log.info("Posting placeholder comment");
+        String message = "❗ This change is not yet ready to be integrated.\n" +
+                "See the **Progress** checklist in the description for automated requirements.\n" +
+                MERGE_READY_MARKER + "\n" + PLACEHOLDER_MARKER;
+        // If the bot posted a placeholder comment, we should update comments otherwise the bot will not be able to find
+        // comment with MERGE_READY_MARKER later and post merge ready comment again
+        return Stream.concat(comments.stream(), Stream.of(pr.addComment(message))).toList();
     }
 
     @Override

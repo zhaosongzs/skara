@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,7 +43,8 @@ public class PullRequestBotBuilder {
     private Set<String> twentyFourHoursLabels = Set.of();
     private Map<String, Pattern> readyComments = Map.of();
     private IssueProject issueProject = null;
-    private boolean ignoreStaleReviews = false;
+    private boolean useStaleReviews = true;
+    private boolean acceptSimpleMerges = false;
     private Pattern allowedTargetBranches = Pattern.compile(".*");
     private Path seedStorage = null;
     private HostedRepository confOverrideRepo = null;
@@ -57,7 +58,7 @@ public class PullRequestBotBuilder {
     private Set<Integer> excludeCommitCommentsFrom = Set.of();
     private boolean reviewCleanBackport = false;
     private String mlbridgeBotName;
-    private boolean reviewMerge = false;
+    private MergePullRequestReviewConfiguration reviewMerge = MergePullRequestReviewConfiguration.JCHECK;
     private boolean processPR = true;
     private boolean processCommit = true;
     private boolean enableMerge = true;
@@ -65,6 +66,10 @@ public class PullRequestBotBuilder {
     private Set<String> mergeSources = Set.of();
     private boolean enableBackport = true;
     private Map<String, List<PRRecord>> issuePRMap;
+    private Approval approval = null;
+    private boolean versionMismatchWarning = false;
+    private boolean cleanCommandEnabled = true;
+    private boolean checkContributorStatusForBackportCommand = true;
 
     PullRequestBotBuilder() {
     }
@@ -129,8 +134,13 @@ public class PullRequestBotBuilder {
         return this;
     }
 
-    public PullRequestBotBuilder ignoreStaleReviews(boolean ignoreStaleReviews) {
-        this.ignoreStaleReviews = ignoreStaleReviews;
+    public PullRequestBotBuilder useStaleReviews(boolean useStaleReviews) {
+        this.useStaleReviews = useStaleReviews;
+        return this;
+    }
+
+    public PullRequestBotBuilder acceptSimpleMerges(boolean acceptSimpleMerges) {
+        this.acceptSimpleMerges = acceptSimpleMerges;
         return this;
     }
 
@@ -199,7 +209,7 @@ public class PullRequestBotBuilder {
         return this;
     }
 
-    public PullRequestBotBuilder reviewMerge(boolean reviewMerge) {
+    public PullRequestBotBuilder reviewMerge(MergePullRequestReviewConfiguration reviewMerge) {
         this.reviewMerge = reviewMerge;
         return this;
     }
@@ -239,14 +249,33 @@ public class PullRequestBotBuilder {
         return this;
     }
 
+    public PullRequestBotBuilder approval(Approval approval) {
+        this.approval = approval;
+        return this;
+    }
+
+    public PullRequestBotBuilder versionMismatchWarning(boolean versionMismatchWarning) {
+        this.versionMismatchWarning = versionMismatchWarning;
+        return this;
+    }
+
+    public PullRequestBotBuilder cleanCommandEnabled(boolean cleanCommandEnabled) {
+        this.cleanCommandEnabled = cleanCommandEnabled;
+        return this;
+    }
+
+    public PullRequestBotBuilder checkContributorStatusForBackportCommand(boolean checkContributorStatusForBackportCommand) {
+        this.checkContributorStatusForBackportCommand = checkContributorStatusForBackportCommand;
+        return this;
+    }
+
     public PullRequestBot build() {
-        return new PullRequestBot(repo, censusRepo, censusRef, labelConfiguration,
-                                  externalPullRequestCommands, externalCommitCommands,
-                                  blockingCheckLabels, readyLabels, twoReviewersLabels, twentyFourHoursLabels,
-                                  readyComments, issueProject, ignoreStaleReviews,
-                                  allowedTargetBranches, seedStorage, confOverrideRepo, confOverrideName,
-                                  confOverrideRef, censusLink, forks, integrators, excludeCommitCommentsFrom,
-                                  enableCsr, enableJep, reviewCleanBackport, mlbridgeBotName, reviewMerge,
-                                  processPR, processCommit, enableMerge, mergeSources, jcheckMerge, enableBackport, issuePRMap);
+        return new PullRequestBot(repo, censusRepo, censusRef, labelConfiguration, externalPullRequestCommands,
+                externalCommitCommands, blockingCheckLabels, readyLabels, twoReviewersLabels, twentyFourHoursLabels,
+                readyComments, issueProject, useStaleReviews, acceptSimpleMerges, allowedTargetBranches, seedStorage, confOverrideRepo,
+                confOverrideName, confOverrideRef, censusLink, forks, integrators, excludeCommitCommentsFrom, enableCsr,
+                enableJep, reviewCleanBackport, mlbridgeBotName, reviewMerge, processPR, processCommit, enableMerge,
+                mergeSources, jcheckMerge, enableBackport, issuePRMap, approval, versionMismatchWarning, cleanCommandEnabled,
+                checkContributorStatusForBackportCommand);
     }
 }

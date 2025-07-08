@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,7 +34,6 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 public class GitLabHost implements Forge {
     private final String name;
@@ -43,11 +42,11 @@ public class GitLabHost implements Forge {
     private final Credential pat;
     private final RestRequest request;
     private final Logger log = Logger.getLogger("org.openjdk.skara.forge.gitlab");
-    private final Set<String> groups;
+    private final List<String> groups;
 
     private HostUser cachedCurrentUser = null;
 
-    public GitLabHost(String name, URI uri, boolean useSsh, Credential pat, Set<String> groups) {
+    public GitLabHost(String name, URI uri, boolean useSsh, Credential pat, List<String> groups) {
         this.name = name;
         this.uri = uri;
         this.useSsh = useSsh;
@@ -60,7 +59,7 @@ public class GitLabHost implements Forge {
         request = new RestRequest(baseApi, pat.username(), (r) -> Arrays.asList("Private-Token", pat.password()));
     }
 
-    GitLabHost(String name, URI uri, boolean useSsh, Set<String> groups) {
+    GitLabHost(String name, URI uri, boolean useSsh, List<String> groups) {
         this.name = name;
         this.uri = uri;
         this.useSsh = useSsh;
@@ -164,7 +163,7 @@ public class GitLabHost implements Forge {
     public Optional<HostUser> user(String username) {
         var details = request.get("users")
                              .param("username", username)
-                             .onError(r -> Optional.of(JSON.of()))
+                             .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.of()) : Optional.empty())
                              .execute();
 
         if (details.isNull()) {
@@ -178,6 +177,20 @@ public class GitLabHost implements Forge {
 
         return Optional.of(parseAuthorObject(users.get(0).asObject()));
     }
+
+    @Override
+    public Optional<HostUser> userById(String id) {
+        var details = request.get("users/" + id)
+                .onError(r -> r.statusCode() == 404 ? Optional.of(JSON.of()) : Optional.empty())
+                .execute();
+
+        if (details.isNull()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(parseAuthorObject(details.asObject()));
+    }
+
 
     @Override
     public HostUser currentUser() {
@@ -221,8 +234,7 @@ public class GitLabHost implements Forge {
     }
 
     @Override
-    public Optional<HostedCommit> search(Hash hash, boolean includeDiffs) {
-        var hex = hash.hex();
+    public Optional<String> search(Hash hash, boolean includeDiffs) {
         for (var group : groups) {
             var ids = request.get("groups/" + group + "/projects")
                                   .execute()
@@ -233,12 +245,12 @@ public class GitLabHost implements Forge {
                                   // path name as that is most likely the main repository of the project.
                                   .sorted(Comparator.comparing(o -> o.get("path").asString().length()))
                                   .map(o -> o.get("id").asInt())
-                                  .collect(Collectors.toList());
+                                  .toList();
             for (var id : ids) {
                 var project = new GitLabRepository(this, id);
                 var commit = project.commit(hash, includeDiffs);
                 if (commit.isPresent()) {
-                    return commit;
+                    return Optional.of(project.name());
                 }
             }
         }
@@ -262,5 +274,20 @@ public class GitLabHost implements Forge {
     @Override
     public Duration timeStampQueryPrecision() {
         return Duration.ofSeconds(1);
+    }
+
+    @Override
+    public List<HostUser> groupMembers(String group) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void addGroupMember(String group, HostUser user) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public MemberState groupMemberState(String group, HostUser user) {
+        throw new UnsupportedOperationException();
     }
 }

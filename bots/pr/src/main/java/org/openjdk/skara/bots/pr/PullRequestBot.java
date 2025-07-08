@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ import org.openjdk.skara.census.Contributor;
 import org.openjdk.skara.forge.*;
 import org.openjdk.skara.issuetracker.*;
 import org.openjdk.skara.json.JSONValue;
+import org.openjdk.skara.network.UncheckedRestException;
 
 import java.net.URI;
 import java.nio.file.Path;
@@ -49,7 +50,8 @@ class PullRequestBot implements Bot {
     private final Set<String> twentyFourHoursLabels;
     private final Map<String, Pattern> readyComments;
     private final IssueProject issueProject;
-    private final boolean ignoreStaleReviews;
+    private final boolean useStaleReviews;
+    private final boolean acceptSimpleMerges;
     private final Pattern allowedTargetBranches;
     private final Path seedStorage;
     private final HostedRepository confOverrideRepo;
@@ -66,7 +68,7 @@ class PullRequestBot implements Bot {
     private final PullRequestPoller poller;
     private final boolean reviewCleanBackport;
     private final String mlbridgeBotName;
-    private final boolean reviewMerge;
+    private final MergePullRequestReviewConfiguration reviewMerge;
     private final boolean processPR;
     private final boolean processCommit;
     private final boolean enableMerge;
@@ -77,6 +79,11 @@ class PullRequestBot implements Bot {
     private final Map<String, Boolean> initializedPRs = new ConcurrentHashMap<>();
     private final Map<String, String> jCheckConfMap = new HashMap<>();
     private final Map<String, Set<String>> targetRefPRMap = new HashMap<>();
+    private final Approval approval;
+    private boolean initialRun = true;
+    private final boolean versionMismatchWarning;
+    private final boolean cleanCommandEnabled;
+    private final boolean checkContributorStatusForBackportCommand;
 
     private Instant lastFullUpdate;
 
@@ -85,13 +92,14 @@ class PullRequestBot implements Bot {
                    Map<String, String> blockingCheckLabels, Set<String> readyLabels,
                    Set<String> twoReviewersLabels, Set<String> twentyFourHoursLabels,
                    Map<String, Pattern> readyComments, IssueProject issueProject,
-                   boolean ignoreStaleReviews, Pattern allowedTargetBranches,
+                   boolean useStaleReviews, boolean acceptSimpleMerges, Pattern allowedTargetBranches,
                    Path seedStorage, HostedRepository confOverrideRepo, String confOverrideName,
                    String confOverrideRef, String censusLink, Map<String, HostedRepository> forks,
                    Set<String> integrators, Set<Integer> excludeCommitCommentsFrom, boolean enableCsr, boolean enableJep,
-                   boolean reviewCleanBackport, String mlbridgeBotName, boolean reviewMerge, boolean processPR, boolean processCommit,
+                   boolean reviewCleanBackport, String mlbridgeBotName, MergePullRequestReviewConfiguration reviewMerge, boolean processPR, boolean processCommit,
                    boolean enableMerge, Set<String> mergeSources, boolean jcheckMerge, boolean enableBackport,
-                   Map<String, List<PRRecord>> issuePRMap) {
+                   Map<String, List<PRRecord>> issuePRMap, Approval approval, boolean versionMismatchWarning, boolean cleanCommandEnabled,
+                   boolean checkContributorStatusForBackportCommand) {
         remoteRepo = repo;
         this.censusRepo = censusRepo;
         this.censusRef = censusRef;
@@ -104,7 +112,8 @@ class PullRequestBot implements Bot {
         this.twentyFourHoursLabels = twentyFourHoursLabels;
         this.issueProject = issueProject;
         this.readyComments = readyComments;
-        this.ignoreStaleReviews = ignoreStaleReviews;
+        this.useStaleReviews = useStaleReviews;
+        this.acceptSimpleMerges = acceptSimpleMerges;
         this.allowedTargetBranches = allowedTargetBranches;
         this.seedStorage = seedStorage;
         this.confOverrideRepo = confOverrideRepo;
@@ -126,6 +135,10 @@ class PullRequestBot implements Bot {
         this.jcheckMerge = jcheckMerge;
         this.enableBackport = enableBackport;
         this.issuePRMap = issuePRMap;
+        this.approval = approval;
+        this.versionMismatchWarning = versionMismatchWarning;
+        this.cleanCommandEnabled = cleanCommandEnabled;
+        this.checkContributorStatusForBackportCommand = checkContributorStatusForBackportCommand;
 
         autoLabelled = new HashSet<>();
         poller = new PullRequestPoller(repo, true);
@@ -148,12 +161,18 @@ class PullRequestBot implements Bot {
 
         for (var pr : pullRequests) {
             if (pr.state() == Issue.State.OPEN) {
-                ret.add(new CheckWorkItem(this, pr.id(), e -> poller.retryPullRequest(pr), pr.updatedAt(), true));
+                if (initialRun) {
+                    ret.add(CheckWorkItem.fromInitialRunOfPRBot(this, pr.id(), e -> poller.retryPullRequest(pr), pr.updatedAt()));
+                } else {
+                    ret.add(CheckWorkItem.fromPRBot(this, pr.id(), e -> poller.retryPullRequest(pr), pr.updatedAt()));
+                }
             } else {
                 // Closed PR's do not need to be checked
                 ret.add(new PullRequestCommandWorkItem(this, pr.id(), e -> poller.retryPullRequest(pr), pr.updatedAt(), true));
             }
         }
+
+        initialRun = false;
 
         return ret;
     }
@@ -172,14 +191,20 @@ class PullRequestBot implements Bot {
             for (var pr : prs) {
                 var targetRef = pr.targetRef();
                 var prId = pr.id();
+                targetRefPRMap.values().forEach(s -> s.remove(prId));
                 if (pr.isOpen()) {
                     targetRefPRMap.computeIfAbsent(targetRef, key -> new HashSet<>()).add(prId);
-                } else {
-                    if (targetRefPRMap.containsKey(targetRef)) {
-                        targetRefPRMap.get(targetRef).remove(prId);
-                    }
                 }
             }
+
+            var activeBranches = remoteRepo.branches().stream()
+                    .map(HostedBranch::name)
+                    .toList();
+
+            var keysToRemove = targetRefPRMap.keySet().stream()
+                    .filter(key -> targetRefPRMap.get(key).isEmpty() || !activeBranches.contains(key))
+                    .toList();
+            keysToRemove.forEach(targetRefPRMap::remove);
 
             var jCheckConfUpdateRelatedPRs = getJCheckConfUpdateRelatedPRs();
             // Filter out duplicate prs
@@ -200,16 +225,25 @@ class PullRequestBot implements Bot {
                 .filter(key -> !targetRefPRMap.get(key).isEmpty())
                 .toList();
         for (var targetRef : allTargetRefs) {
-            var currConfOpt = remoteRepo.fileContents(".jcheck/conf", targetRef);
-            if (currConfOpt.isEmpty()) {
-                continue;
-            }
-            var currConf = currConfOpt.get();
-            if (!jCheckConfMap.containsKey(targetRef)) {
-                jCheckConfMap.put(targetRef, currConf);
-            } else if (!jCheckConfMap.get(targetRef).equals(currConf)) {
-                ret.addAll(remoteRepo.openPullRequestsWithTargetRef(targetRef));
-                jCheckConfMap.put(targetRef, currConf);
+            try {
+                var currConfOpt = remoteRepo.fileContents(".jcheck/conf", targetRef);
+                if (currConfOpt.isEmpty()) {
+                    continue;
+                }
+                var currConf = currConfOpt.get();
+                if (!jCheckConfMap.containsKey(targetRef)) {
+                    jCheckConfMap.put(targetRef, currConf);
+                } else if (!jCheckConfMap.get(targetRef).equals(currConf)) {
+                    ret.addAll(remoteRepo.openPullRequestsWithTargetRef(targetRef));
+                    jCheckConfMap.put(targetRef, currConf);
+                }
+            } catch (UncheckedRestException e) {
+                // If the targetRef is invalid, fileContents() will throw a 404 instead of returning
+                // empty. In this case we should ignore this and continue processing other PRs.
+                // Any invalid refs will get removed from targetRefMap in the next round.
+                if (e.getStatusCode() != 404) {
+                    throw e;
+                }
             }
         }
         return ret;
@@ -279,8 +313,12 @@ class PullRequestBot implements Bot {
         return issueProject;
     }
 
-    boolean ignoreStaleReviews() {
-        return ignoreStaleReviews;
+    boolean useStaleReviews() {
+        return useStaleReviews;
+    }
+
+    boolean acceptSimpleMerges() {
+        return acceptSimpleMerges;
     }
 
     Pattern allowedTargetBranches() {
@@ -350,7 +388,7 @@ class PullRequestBot implements Bot {
         return mlbridgeBotName;
     }
 
-    public boolean reviewMerge(){
+    public MergePullRequestReviewConfiguration reviewMerge() {
         return reviewMerge;
     }
 
@@ -376,6 +414,22 @@ class PullRequestBot implements Bot {
 
     public Map<String, List<PRRecord>> issuePRMap() {
         return issuePRMap;
+    }
+
+    public Approval approval() {
+        return approval;
+    }
+
+    public boolean versionMismatchWarning() {
+        return versionMismatchWarning;
+    }
+
+    public boolean cleanCommandEnabled() {
+        return cleanCommandEnabled;
+    }
+
+    public boolean checkContributorStatusForBackportCommand() {
+        return checkContributorStatusForBackportCommand;
     }
 
     public void addIssuePRMapping(String issueId, PRRecord prRecord) {

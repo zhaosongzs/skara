@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,6 @@ import org.openjdk.skara.vcs.*;
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -74,7 +73,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -138,7 +137,7 @@ class MergeTests {
                     .addCommitter(author.forge().currentUser().id())
                     .addReviewer(integrator.forge().currentUser().id());
             var mergeBot = PullRequestBot.newBuilder().repo(integrator).censusRepo(censusBuilder.build())
-                    .reviewMerge(true).build();
+                    .reviewMerge(MergePullRequestReviewConfiguration.ALWAYS).build();
 
             // Populate the projects repository
             var localRepoFolder = tempFolder.path().resolve("localrepo");
@@ -159,7 +158,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -225,6 +224,164 @@ class MergeTests {
     }
 
     @Test
+    void branchMergeWithReviewersCommand(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id());
+            var mergeBot = PullRequestBot.newBuilder().repo(integrator).censusRepo(censusBuilder.build()).build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make more changes in another branch
+            var otherHash1 = CheckableRepository.appendAndCommit(localRepo, "First change in other_/-1.2",
+                    "First other_/-1.2\n\nReviewed-by: integrationreviewer2");
+            localRepo.push(otherHash1, author.authenticatedUrl(), "other_/-1.2", true);
+            var otherHash2 = CheckableRepository.appendAndCommit(localRepo, "Second change in other_/-1.2",
+                    "Second other_/-1.2\n\nReviewed-by: integrationreviewer2");
+            localRepo.push(otherHash2, author.authenticatedUrl(), "other_/-1.2");
+
+            // Go back to the original master
+            localRepo.checkout(masterHash, true);
+
+            // Make a change with a corresponding PR
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
+            localRepo.add(unrelated);
+            var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
+            localRepo.merge(otherHash2);
+            localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
+
+            var mergeHash = localRepo.commit("Merge commit", "some", "some@one");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Merge " + author.name() + ":other_/-1.2");
+
+            pr.addComment("/reviewers 1");
+
+            // Let the bot check the status
+            TestBotRunner.runPeriodicItems(mergeBot);
+            assertTrue(pr.store().labelNames().contains("clean"));
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("[ ] Change must be properly reviewed (1 review required, with at least 1 [Reviewer](https://openjdk.org/bylaws#reviewer))"));
+
+            // Approve it
+            var reviewerPr = integrator.pullRequest(pr.id());
+            reviewerPr.addReview(Review.Verdict.APPROVED, "LGTM");
+            TestBotRunner.runPeriodicItems(mergeBot);
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("[x] Change must be properly reviewed (1 review required, with at least 1 [Reviewer](https://openjdk.org/bylaws#reviewer))"));
+
+            // Push it
+            pr.addComment("/integrate");
+            TestBotRunner.runPeriodicItems(mergeBot);
+
+            // The bot should reply with an ok message
+            var pushed = pr.comments().stream()
+                    .filter(comment -> comment.body().contains("Pushed as commit"))
+                    .count();
+            assertEquals(1, pushed);
+        }
+    }
+
+
+    @Test
+    void runJCheckTwiceInMergePR(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var author = credentials.getHostedRepository();
+            var integrator1 = credentials.getHostedRepository();
+            var integrator2 = credentials.getHostedRepository();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator1.forge().currentUser().id())
+                    .addReviewer(integrator2.forge().currentUser().id());
+            var mergeBot = PullRequestBot.newBuilder().repo(integrator1).censusRepo(censusBuilder.build())
+                    .reviewMerge(MergePullRequestReviewConfiguration.JCHECK).build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make more changes in another branch
+
+            var checkConf = localRepoFolder.resolve(".jcheck/conf");
+            try (var output = Files.newBufferedWriter(checkConf)) {
+                output.append("[general]\n");
+                output.append("project=test\n");
+                output.append("jbs=tstprj\n");
+                output.append("\n");
+                output.append("[checks]\n");
+                output.append("error=");
+                output.append(String.join(",", Set.of("author", "reviewers", "whitespace")));
+                output.append("\n\n");
+                output.append("[census]\n");
+                output.append("version=0\n");
+                output.append("domain=openjdk.org\n");
+                output.append("\n");
+                output.append("[checks \"whitespace\"]\n");
+                output.append("files=.*\\.txt\n");
+                output.append("\n");
+                output.append("[checks \"reviewers\"]\n");
+                output.append("reviewers=2\n");
+                output.append("merge=check");
+            }
+            localRepo.add(checkConf);
+            var otherHash1 = localRepo.commit("add conf to master", "testauthor", "ta@none.none");
+            localRepo.push(otherHash1, author.authenticatedUrl(), "other_/-1.2");
+
+            var otherHash2 = CheckableRepository.appendAndCommit(localRepo, "Second change in other_/-1.2",
+                    "Second other_/-1.2\n\nReviewed-by: integrationreviewer2");
+            localRepo.push(otherHash2, author.authenticatedUrl(), "other_/-1.2");
+
+            // Go back to the original master
+            localRepo.checkout(masterHash, true);
+
+            // Make a change with a corresponding PR
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
+            localRepo.add(unrelated);
+            var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
+            localRepo.merge(otherHash2);
+            localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
+
+            var mergeHash = localRepo.commit("Merge commit", "some", "some@one");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Merge " + author.name() + ":other_/-1.2");
+
+            // Let the bot check the status
+            TestBotRunner.runPeriodicItems(mergeBot);
+
+            // pr should not be ready, because JCheck conf updated in source branch
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 2) (failed with updated jcheck configuration in pull request)"));
+
+            // Approve it as another user
+            var approvalPr1 = integrator1.pullRequest(pr.id());
+            approvalPr1.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(mergeBot);
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 1, need at least 2)"));
+
+            var approvalPr2 = integrator2.pullRequest(pr.id());
+            approvalPr2.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(mergeBot);
+            assertTrue(pr.store().labelNames().contains("ready"));
+            assertFalse(pr.store().body().contains("Too few reviewers with at least role reviewer found"));
+        }
+    }
+
+    @Test
     void mergeAllowed(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory()) {
@@ -259,7 +416,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -320,7 +477,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -377,7 +534,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -463,7 +620,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -525,7 +682,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -607,7 +764,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -693,7 +850,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -777,7 +934,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -796,7 +953,7 @@ class MergeTests {
 
             // Push something new to master
             localRepo.checkout(updatedMaster, true);
-            var newMaster = Files.writeString(localRepo.root().resolve("newmaster.txt"), "New on master", StandardCharsets.UTF_8);
+            var newMaster = Files.writeString(localRepo.root().resolve("newmaster.txt"), "New on master");
             localRepo.add(newMaster);
             var newMasterHash = localRepo.commit("New commit on master", "some", "some@one");
             localRepo.push(newMasterHash, author.authenticatedUrl(), "master");
@@ -871,7 +1028,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -890,7 +1047,7 @@ class MergeTests {
 
             // Push something new to master
             localRepo.checkout(updatedMaster, true);
-            var newMaster = Files.writeString(localRepo.root().resolve("newmaster.txt"), "New on master", StandardCharsets.UTF_8);
+            var newMaster = Files.writeString(localRepo.root().resolve("newmaster.txt"), "New on master");
             localRepo.add(newMaster);
             var newMasterHash = localRepo.commit("New commit on master", "some", "some@one");
             localRepo.push(newMasterHash, author.authenticatedUrl(), "master");
@@ -982,7 +1139,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash);
@@ -1047,7 +1204,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1107,7 +1264,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1167,7 +1324,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1233,7 +1390,7 @@ class MergeTests {
 
             // Make a change with a corresponding PR
             localRepo.checkout(masterHash, true);
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1293,7 +1450,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1352,23 +1509,24 @@ class MergeTests {
             var otherHash = CheckableRepository.appendAndCommit(unrelatedRepo, "Change in other",
                                                                 "Other\n\nReviewed-by: integrationreviewer2");
             unrelatedRepo.push(otherHash, author.authenticatedUrl(), "other", true);
-            localRepo.fetch(author.authenticatedUrl(), "other");
+            localRepo.fetch(author.authenticatedUrl(), "other").orElseThrow();
 
             // Go back to the original master
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             localRepo.commit("Unrelated", "some", "some@one");
-            var mergeCmd = Process.command("git", "merge", "--no-commit", "--allow-unrelated-histories", "-s", "ours", otherHash.hex())
-                                  .workdir(localRepo.root())
-                                  .environ("GIT_AUTHOR_NAME", "some")
-                                  .environ("GIT_AUTHOR_EMAIL", "some@one")
-                                  .environ("GIT_COMMITTER_NAME", "another")
-                                  .environ("GIT_COMMITTER_EMAIL", "another@one")
-                                  .execute();
-            mergeCmd.check();
+            try (var p = Process.command("git", "merge", "--no-commit", "--allow-unrelated-histories", "-s", "ours", otherHash.hex())
+                    .workdir(localRepo.root())
+                    .environ("GIT_AUTHOR_NAME", "some")
+                    .environ("GIT_AUTHOR_EMAIL", "some@one")
+                    .environ("GIT_COMMITTER_NAME", "another")
+                    .environ("GIT_COMMITTER_EMAIL", "another@one")
+                    .execute()) {
+                p.check();
+            }
 
             //localRepo.merge(otherHash);
             var mergeHash = localRepo.commit("Merge commit", "some", "some@one");
@@ -1425,7 +1583,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1481,7 +1639,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1531,14 +1689,14 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit( "Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
 
             // Go back to the original master again
             localRepo.checkout(masterHash, true);
-            var editChange = Files.writeString(localRepo.root().resolve("edit.txt"), "Edit", StandardCharsets.UTF_8);
+            var editChange = Files.writeString(localRepo.root().resolve("edit.txt"), "Edit");
             localRepo.add(editChange);
             var editHash = localRepo.commit( "Edit", "some", "some@one");
 
@@ -1552,7 +1710,7 @@ class MergeTests {
             TestBotRunner.runPeriodicItems(mergeBot);
 
             // Merging latest master should not trigger a warning
-            assertEquals(0, pr.comments().size());
+            assertEquals(1, pr.comments().size());
 
             localRepo.merge(otherHash2);
             var mergeHash = localRepo.commit("Merge commit", "some", "some@one");
@@ -1597,7 +1755,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
@@ -1642,9 +1800,9 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // update
-            var defaultAppendable = Files.readString(localRepo.root().resolve("appendable.txt"), StandardCharsets.UTF_8);
+            var defaultAppendable = Files.readString(localRepo.root().resolve("appendable.txt"));
             var newAppendable = "11111\n" + defaultAppendable;
-            Files.writeString(localRepo.root().resolve("appendable.txt"), newAppendable, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve("appendable.txt"), newAppendable);
             localRepo.add(localRepo.root().resolve("appendable.txt"));
             localRepo.commit("updated", "test", "test@test.com");
 
@@ -1725,9 +1883,8 @@ class MergeTests {
 
             // Let the bot check the status
             TestBotRunner.runPeriodicItems(mergeBot);
-            var comment = pr.store().comments().get(pr.store().comments().size() - 1);
-            assertEquals(1, pr.store().comments().size());
-            assertTrue(comment.body().contains("can not be source repo for merge-style pull requests in this repository."));
+            assertEquals(2, pr.comments().size());
+            assertLastCommentContains(pr, "can not be source repo for merge-style pull requests in this repository.");
         }
     }
 
@@ -1762,7 +1919,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -1788,8 +1945,8 @@ class MergeTests {
                     .count();
             assertEquals(0, pushed);
 
-            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (in commit " + otherHash1.hex() + ")"));
-            assertTrue(pr.store().body().contains("Whitespace errors (in commit " + otherHash2.hex() + ")"));
+            assertTrue(pr.store().body().contains("Too few reviewers with at least role reviewer found (have 0, need at least 1) (in commit `" + otherHash1.hex() + "` with target configuration)"));
+            assertTrue(pr.store().body().contains("Whitespace errors (in commit `" + otherHash2.hex() + "` with target configuration)"));
         }
     }
 
@@ -1818,7 +1975,7 @@ class MergeTests {
             localRepo.push(otherHash1, author.authenticatedUrl(), "other_/-1.2", true);
 
             var confPath = localRepoFolder.resolve(".jcheck/conf");
-            Files.writeString(confPath, "Hello there!", StandardCharsets.UTF_8);
+            Files.writeString(confPath, "Hello there!");
             localRepo.add(confPath);
             var otherHash2 = CheckableRepository.appendAndCommit(localRepo, "Second change in other_/-1.2\n\r",
                     "Second other_/-1.2\n\nReviewed-by: integrationreviewer2");
@@ -1828,7 +1985,7 @@ class MergeTests {
             localRepo.checkout(masterHash, true);
 
             // Make a change with a corresponding PR
-            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated", StandardCharsets.UTF_8);
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
             localRepo.add(unrelated);
             var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
             localRepo.merge(otherHash2);
@@ -1846,8 +2003,61 @@ class MergeTests {
             var check = checks.get("jcheck");
             assertEquals(CheckStatus.FAILURE, check.status());
             assertEquals("line 0: entry must be of form 'key = value'", check.summary().get());
-            assertEquals("Exception occurred during merge jcheck in commit " + otherHash2.hex() + " - the operation will be retried",
+            assertEquals("Exception occurred during merge jcheck with target conf in commit " + otherHash2.hex() + " - the operation will be retried",
                     check.title().get());
+        }
+    }
+
+    @Test
+    void noSecondParentSpecified(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id());
+            var mergeBot = PullRequestBot.newBuilder()
+                                         .repo(integrator)
+                                         .censusRepo(censusBuilder.build())
+                                         .reviewMerge(MergePullRequestReviewConfiguration.ALWAYS)
+                                         .jcheckMerge(true)
+                                         .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make more changes in another branch
+            var otherHash1 = CheckableRepository.appendAndCommit(localRepo, "First change in other",
+                    "First other\n\nReviewed-by: integrationreviewer2");
+            var otherHash2 = CheckableRepository.appendAndCommit(localRepo, "Second change in other",
+                    "Second other\n\nReviewed-by: integrationreviewer2");
+            localRepo.push(otherHash2, author.authenticatedUrl(), "other");
+
+            // Go back to the original master
+            localRepo.checkout(masterHash, true);
+
+            // Make a change with a corresponding PR
+            var unrelated = Files.writeString(localRepo.root().resolve("unrelated.txt"), "Unrelated");
+            localRepo.add(unrelated);
+            var updatedMaster = localRepo.commit("Unrelated", "some", "some@one");
+            localRepo.push(updatedMaster, author.authenticatedUrl(), "master");
+
+            var pr = credentials.createPullRequest(author, "master", "other", "Merge");
+
+            // Let the bot check the status
+            TestBotRunner.runPeriodicItems(mergeBot);
+
+            // The PR title should have been updated
+            assertEquals("Merge " + otherHash2.hex(), pr.title());
+            assertLastCommentContains(pr,
+                    "The second parent of the resulting merge commit from this pull request will be set to `" +
+                    otherHash2.hex() + "`");
         }
     }
 }

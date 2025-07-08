@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -251,10 +251,11 @@ class MergeBot implements Bot, WorkItem {
     }
 
     private static void deleteDirectory(Path dir) throws IOException {
-        Files.walk(dir)
-             .map(Path::toFile)
-             .sorted(Comparator.reverseOrder())
-             .forEach(File::delete);
+        try (var paths = Files.walk(dir)) {
+            paths.map(Path::toFile)
+                 .sorted(Comparator.reverseOrder())
+                 .forEach(File::delete);
+        }
     }
 
     private Repository cloneAndSyncFork(Path to) throws IOException {
@@ -263,7 +264,7 @@ class MergeBot implements Bot, WorkItem {
         // Sync personal fork
         var remoteBranches = repo.remoteBranches(target.authenticatedUrl().toString());
         for (var branch : remoteBranches) {
-            var fetchHead = repo.fetch(target.authenticatedUrl(), branch.hash().hex(), false);
+            var fetchHead = repo.fetch(target.authenticatedUrl(), branch.hash().hex(), false).orElseThrow();
             repo.push(fetchHead, fork.authenticatedUrl(), branch.name());
         }
 
@@ -275,10 +276,9 @@ class MergeBot implements Bot, WorkItem {
 
     @Override
     public boolean concurrentWith(WorkItem other) {
-        if (!(other instanceof MergeBot)) {
+        if (!(other instanceof MergeBot otherBot)) {
             return true;
         }
-        var otherBot = (MergeBot) other;
         return !target.name().equals(otherBot.target.name());
     }
 
@@ -447,7 +447,7 @@ class MergeBot implements Bot, WorkItem {
 
                 log.info("Trying to merge " + fromRepo.name() + ":" + fromBranch.name() + " to " + toBranch.name());
                 log.info("Fetching " + fromRepo.name() + ":" + fromBranch.name());
-                var fetchHead = repo.fetch(fromRepo.authenticatedUrl(), fromBranch.name(), false);
+                var fetchHead = repo.fetch(fromRepo.authenticatedUrl(), fromBranch.name(), false).orElseThrow();
                 var head = repo.resolve(toBranch.name()).orElseThrow(() ->
                         new IOException("Could not resolve branch " + toBranch.name())
                 );
@@ -491,9 +491,7 @@ class MergeBot implements Bot, WorkItem {
                     var status = repo.status();
                     repo.abortMerge();
 
-                    var fromRepoName = Path.of(fromRepo.webUrl().getPath()).getFileName();
-
-                    var numBranchesInFork = repo.remoteBranches(fork.webUrl().toString()).size();
+                    var numBranchesInFork = repo.remoteBranches(fork.authenticatedUrl().toString()).size();
                     var branchDesc = Integer.toString(numBranchesInFork + 1);
                     repo.push(fetchHead, fork.authenticatedUrl(), branchDesc);
 
@@ -583,13 +581,12 @@ class MergeBot implements Bot, WorkItem {
                     message.add("");
                     message.add("/integrate auto");
 
-                    var prFromFork = fork.createPullRequest(prTarget,
-                                                            toBranch.name(),
-                                                            branchDesc,
-                                                            title,
-                                                            message);
-                    var prFromTarget = target.pullRequest(prFromFork.id());
-                    prFromTarget.addLabel("failed-auto-merge");
+                    var pr = fork.createPullRequest(prTarget,
+                            toBranch.name(),
+                            branchDesc,
+                            title,
+                            message);
+                    pr.addLabel("failed-auto-merge");
                 }
             }
         } catch (IOException e) {

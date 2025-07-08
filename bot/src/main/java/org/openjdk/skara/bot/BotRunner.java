@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -123,8 +123,8 @@ public class BotRunner {
 
         private static Optional<ThreadMXBean> getThreadMXBean() {
             var bean = ManagementFactory.getThreadMXBean();
-            return bean instanceof ThreadMXBean ?
-                Optional.of((ThreadMXBean) bean) : Optional.empty();
+            return bean instanceof ThreadMXBean b ?
+                Optional.of(b) : Optional.empty();
         }
 
         private static void enableThreadCpuTime() {
@@ -227,7 +227,8 @@ public class BotRunner {
                     if (e.getCause() instanceof UncheckedRestException) {
                         // Log as WARNING to avoid triggering alarms. Failed REST calls are tracked
                         // using metrics.
-                        log.log(Level.WARNING, "RestException during item execution (" + item + ")", e.getCause());
+                        log.log(Level.WARNING, "RestException during item execution (" + item + ")"
+                                + e.getCause().getMessage(), e.getCause());
                     } else {
                         log.log(Level.SEVERE, "Exception during item execution (" + item + "): " + e.getMessage(), e);
                     }
@@ -472,7 +473,7 @@ public class BotRunner {
                     } catch (UncheckedRestException e) {
                         // Log as WARNING to avoid triggering alarms. Failed REST calls are tracked
                         // using metrics.
-                        log.log(Level.WARNING, "RestException during periodic items checking", e);
+                        log.log(Level.WARNING, "RestException during periodic items checking: " + e.getMessage(), e);
                     } catch (RuntimeException e) {
                         log.log(Level.SEVERE, "Exception during periodic items checking: " + e.getMessage(), e);
                     } finally {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -96,10 +96,13 @@ public class SponsorCommand implements CommandHandler {
             pr = pr.repository().pullRequest(pr.id());
 
             var localRepo = IntegrateCommand.materializeLocalRepo(bot, pr, scratchArea);
-            var checkablePr = new CheckablePullRequest(pr, localRepo, bot.ignoreStaleReviews(),
-                                                       bot.confOverrideRepository().orElse(null),
-                                                       bot.confOverrideName(),
-                                                       bot.confOverrideRef());
+            var checkablePr = new CheckablePullRequest(pr, localRepo, bot.useStaleReviews(),
+                    bot.confOverrideRepository().orElse(null),
+                    bot.confOverrideName(),
+                    bot.confOverrideRef(),
+                    allComments,
+                    bot.reviewMerge(),
+                    new ReviewCoverage(bot.useStaleReviews(), bot.acceptSimpleMerges(), localRepo, pr));
 
             // Validate the target hash if requested
             if (!command.args().isBlank()) {
@@ -124,12 +127,12 @@ public class SponsorCommand implements CommandHandler {
             var localHash = checkablePr.commit(rebasedHash.get(), censusInstance.namespace(), censusInstance.configuration().census().domain(),
                     command.user().id(), original);
 
-            if (IntegrateCommand.runJcheck(pr, censusInstance, allComments, reply, localRepo, checkablePr, localHash, bot.reviewMerge())) {
+            if (IntegrateCommand.runJcheck(pr, censusInstance, allComments, reply, checkablePr, localHash)) {
                 return;
             }
 
             if (!localHash.equals(checkablePr.targetHash())) {
-                var amendedHash = checkablePr.amendManualReviewers(localHash, censusInstance.namespace(), original);
+                var amendedHash = checkablePr.amendManualReviewersAndStaleReviewers(localHash, censusInstance.namespace(), original);
                 IntegrateCommand.addPrePushComment(pr, amendedHash, rebaseMessage.toString());
                 localRepo.push(amendedHash, pr.repository().authenticatedUrl(), pr.targetRef());
                 markIntegratedAndClosed(pr, amendedHash, reply, allComments);

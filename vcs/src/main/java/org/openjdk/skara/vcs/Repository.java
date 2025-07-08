@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,13 +41,13 @@ public interface Repository extends ReadOnlyRepository {
     default void checkout(Branch b) throws IOException {
         checkout(b, false);
     }
-    default Hash fetch(URI uri, String refspec) throws IOException {
+    default Optional<Hash> fetch(URI uri, String refspec) throws IOException {
         return fetch(uri, refspec, true);
     }
-    default Hash fetch(URI uri, String refspec, boolean includeTags) throws IOException {
+    default Optional<Hash> fetch(URI uri, String refspec, boolean includeTags) throws IOException {
         return fetch(uri, refspec, includeTags, false);
     }
-    Hash fetch(URI uri, String refspec, boolean includeTags, boolean forceUpdateTags) throws IOException;
+    Optional<Hash> fetch(URI uri, String refspec, boolean includeTags, boolean forceUpdateTags) throws IOException;
     default void fetchAll(URI uri) throws IOException {
         fetchAll(uri, true);
     }
@@ -71,6 +71,7 @@ public interface Repository extends ReadOnlyRepository {
     void push(Hash hash, URI uri, String ref, boolean force, boolean includeTags) throws IOException;
     void push(Branch branch, String remote, boolean setUpstream) throws IOException;
     void push(Tag tag, URI uri, boolean force) throws IOException;
+    void push(String refspec, URI uri) throws IOException;
     void clean() throws IOException;
     void reset(Hash target, boolean hard) throws IOException;
     void revert(Hash parent) throws IOException;
@@ -190,6 +191,18 @@ public interface Repository extends ReadOnlyRepository {
         updateSubmodule(s.path());
     }
 
+    void addNote(Hash hash,
+                 List<String> lines,
+                 String authorName,
+                 String authorEmail,
+                 String committerName,
+                 String committerEmail) throws IOException;
+    default void addNote(Hash hash, List<String> lines, String authorName, String authorEmail) throws IOException {
+        addNote(hash, lines, authorName, authorEmail, authorName, authorEmail);
+    }
+    List<String> notes(Hash hash) throws IOException;
+    void pushNotes(URI uri) throws IOException;
+
     /**
      * Check whether this commit is empty.
      * For a merge commit, it will be considered as empty if it has no merge resolutions.
@@ -222,6 +235,8 @@ public interface Repository extends ReadOnlyRepository {
         GitRepository.ignoreConfiguration();
         HgRepository.ignoreConfiguration();
     }
+
+    boolean isRemergeDiffEmpty(Hash mergeCommitHash) throws IOException;
 
     static Optional<Repository> get(Path p) throws IOException {
         var gitRepo = GitRepository.get(p);
@@ -269,14 +284,14 @@ public interface Repository extends ReadOnlyRepository {
             }
         }
 
-        var baseHash = localRepo.fetch(remote, ref);
+        var baseHash = localRepo.fetch(remote, ref).orElseThrow();
 
         if (checkout) {
             try {
                 localRepo.checkout(baseHash, true);
             } catch (IOException e) {
                 localRepo.reinitialize();
-                baseHash = localRepo.fetch(remote, ref);
+                baseHash = localRepo.fetch(remote, ref).orElseThrow();
                 localRepo.checkout(baseHash, true);
             }
         }

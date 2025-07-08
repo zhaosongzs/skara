@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,12 +33,12 @@ import org.openjdk.skara.vcs.Hash;
 import org.openjdk.skara.vcs.Repository;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertLastCommentContains;
+import static org.openjdk.skara.bots.pr.CheckRun.CSR_PROCESS_LINK;
 
 class CSRCommandTests {
     @Test
@@ -81,7 +81,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                                           "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -92,7 +92,7 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with a message that a CSR is no longer needed
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                                           "is not needed for this pull request.");
             assertFalse(pr.store().labelNames().contains("csr"));
             // The PR body shouldn't contain the progress about CSR request
@@ -104,7 +104,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                                           "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -206,7 +206,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that the CSR is already aproved
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") " +
                                           "(CSR) request is needed for this pull request.");
             assertLastCommentContains(pr, "this pull request must refer to an issue in [JBS]");
             assertLastCommentContains(pr, "To refer this pull request to an issue in JBS");
@@ -274,7 +274,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                                           "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -338,7 +338,7 @@ class CSRCommandTests {
 
             // Show help
             assertLastCommentContains(pr, "usage: `/csr [needed|unneeded]`, requires that the issue the pull request refers to links " +
-                                          "to an approved [CSR](https://wiki.openjdk.org/display/csr/Main) request.");
+                                          "to an approved [CSR](" + CSR_PROCESS_LINK + ") request.");
             assertFalse(pr.store().labelNames().contains("csr"));
             // The PR body shouldn't contain the progress about CSR request
             assertFalse(pr.store().body().contains("Change requires a CSR request matching fixVersion 0.1 to be approved (needs to be created)"));
@@ -384,10 +384,10 @@ class CSRCommandTests {
 
             // The bot should reply with a message that the PR must refer to an issue in JBS
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") " +
                                           "(CSR) request is needed for this pull request.");
             assertLastCommentContains(pr, "this pull request must refer to an issue in [JBS]");
-            assertLastCommentContains(pr, "to be able to link it to a [CSR](https://wiki.openjdk.org/display/csr/Main) request. To refer this pull request to an issue in JBS");
+            assertLastCommentContains(pr, "to be able to link it to a [CSR](" + CSR_PROCESS_LINK + ") request. To refer this pull request to an issue in JBS");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion 0.1 to be approved (needs to be created)"));
@@ -434,7 +434,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                                           "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -505,7 +505,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that there is already an approved CSR request
             // Before '/csr' is handled, csr label is added to this pr
-            assertLastCommentContains(pr, "an approved [CSR](https://wiki.openjdk.org/display/csr/Main) request is already required for this pull request.");
+            assertLastCommentContains(pr, "an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
             assertLastCommentContains(pr, "<!-- csr: 'needed' -->");
             // The PR body should contain the progress about CSR request
             assertTrue(pr.store().body().contains("- [ ] " + generateCSRProgressMessage(csr)));
@@ -531,7 +531,7 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with a message that a CSR is no longer needed
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                     "is not needed for this pull request.");
             assertFalse(pr.store().labelNames().contains("csr"));
             // The PR body shouldn't contain the progress about CSR request
@@ -591,7 +591,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that there is already an approved CSR request
             // Before '/csr' is handled, csr label is added to this pr
-            assertLastCommentContains(pr, "an approved [CSR](https://wiki.openjdk.org/display/csr/Main) request is already required for this pull request.");
+            assertLastCommentContains(pr, "an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
             assertLastCommentContains(pr, "<!-- csr: 'needed' -->");
             // The PR body should contain the progress about CSR request
             assertTrue(pr.store().body().contains("- [ ] " + generateCSRProgressMessage(csr)));
@@ -617,7 +617,7 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with a message that a CSR is no longer needed
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                     "is not needed for this pull request.");
             assertFalse(pr.store().labelNames().contains("csr"));
             // The PR body shouldn't contain the progress about CSR request
@@ -659,7 +659,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                                           "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -720,7 +720,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                                          "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                                          "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                                           "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
 
@@ -775,7 +775,7 @@ class CSRCommandTests {
             pr.addComment("/csr");
             TestBotRunner.runPeriodicItems(enableCsrBot);
             assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                    "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                     "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             assertTrue(pr.store().body().contains("Change requires a CSR request matching fixVersion 0.1 to be approved (needs to be created)"));
@@ -837,9 +837,9 @@ class CSRCommandTests {
 
             // Remove `version=0.1` from `.jcheck/conf`, set the version as null
             localRepo.checkout(localRepo.defaultBranch());
-            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             var newConf = defaultConf.replace("version=0.1", "");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             var confHash = localRepo.commit("Set version as null", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -847,30 +847,40 @@ class CSRCommandTests {
             var pr = credentials.createPullRequest(author, "master", "edit1", "Backport " + commitHash);
             PullRequestUtils.postPullRequestLinkComment(issue, pr);
 
+            // "csr" label should be added automatically because the main issue has a resolved CSR
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(3 ,pr.store().comments().size());
+            assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion (No fixVersion in .jcheck/conf) to be approved (needs to be created)"));
+            assertLastCommentContains(pr, "this backport may also need a CSR");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(3 ,pr.store().comments().size());
+
             // Run prBot. Request a CSR.
             pr.addComment("/csr");
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion (No fixVersion in .jcheck/conf) to be approved (needs to be created)"));
             assertTrue(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
-                    "is needed for this pull request.");
-            assertLastCommentContains(pr, "please create a [CSR](https://wiki.openjdk.org/display/csr/Main) request");
-            assertLastCommentContains(pr, "with the correct fix version");
-            assertLastCommentContains(pr, "This pull request cannot be integrated until the CSR request is approved.");
+            assertLastCommentContains(pr, "@user1 an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
+
             // Use `/csr unneeded` to revert the change.
             pr.addComment("/csr unneeded");
             TestBotRunner.runPeriodicItems(prBot);
             assertFalse(pr.store().body().contains("Change requires a CSR request matching fixVersion (No fixVersion in .jcheck/conf) to be approved (needs to be created)"));
             assertFalse(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                     "is not needed for this pull request.");
+
+            // Run pr bot again, "csr" label should not be added because reviewer issued "/csr unneeded"
+            assertEquals(7 ,pr.store().comments().size());
+            TestBotRunner.runPeriodicItems(prBot);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(7 ,pr.store().comments().size());
 
             // Add `version=bla` to `.jcheck/conf`, set the version as a wrong value
             localRepo.checkout(localRepo.defaultBranch());
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("project=test", "project=test\nversion=bla");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as a wrong value", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -883,25 +893,21 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion (No fixVersion in .jcheck/conf) to be approved (needs to be created)"));
             assertTrue(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
-                    "is needed for this pull request.");
-            assertLastCommentContains(pr, "please create a [CSR](https://wiki.openjdk.org/display/csr/Main) request");
-            assertLastCommentContains(pr, "with the correct fix version");
-            assertLastCommentContains(pr, "This pull request cannot be integrated until the CSR request is approved.");
+            assertLastCommentContains(pr, "@user1 an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
+
             // Use `/csr unneeded` to revert the change.
             pr.addComment("/csr unneeded");
             TestBotRunner.runPeriodicItems(prBot);
             assertFalse(pr.store().body().contains("Change requires a CSR request matching fixVersion (No fixVersion in .jcheck/conf) to be approved (needs to be created)"));
             assertFalse(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                     "is not needed for this pull request.");
 
             // Set the `version` in `.jcheck/conf` as 17 which is an available version.
             localRepo.checkout(localRepo.defaultBranch());
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("version=bla", "version=17");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as 17", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -914,18 +920,14 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion 17 to be approved (needs to be created)"));
             assertTrue(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
-                    "is needed for this pull request.");
-            assertLastCommentContains(pr, "please create a [CSR](https://wiki.openjdk.org/display/csr/Main) request");
-            assertLastCommentContains(pr, "with the correct fix version");
-            assertLastCommentContains(pr, "This pull request cannot be integrated until the CSR request is approved.");
+            assertLastCommentContains(pr, "@user1 an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
+
             // Use `/csr unneeded` to revert the change.
             pr.addComment("/csr unneeded");
             TestBotRunner.runPeriodicItems(prBot);
             assertFalse(pr.store().body().contains("Change requires a CSR request matching fixVersion 17 to be approved (needs to be created)"));
             assertFalse(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                     "is not needed for this pull request.");
 
             // Set the fix versions of the primary CSR to 17 and 18.
@@ -961,18 +963,14 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion 17 to be approved (needs to be created)"));
             assertTrue(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
-                    "is needed for this pull request.");
-            assertLastCommentContains(pr, "please create a [CSR](https://wiki.openjdk.org/display/csr/Main) request");
-            assertLastCommentContains(pr, "with the correct fix version");
-            assertLastCommentContains(pr, "This pull request cannot be integrated until the CSR request is approved.");
+            assertLastCommentContains(pr, "@user1 an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
+
             // Use `/csr unneeded` to revert the change.
             pr.addComment("/csr unneeded");
             TestBotRunner.runPeriodicItems(prBot);
             assertFalse(pr.store().body().contains("Change requires a CSR request matching fixVersion 17 to be approved (needs to be created)"));
             assertFalse(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
                     "is not needed for this pull request.");
 
             // Create a backport CSR whose fix version is 17.
@@ -988,7 +986,7 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().body().contains("- [ ] " + generateCSRProgressMessage(backportCsr)));
             assertTrue(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "an approved [CSR](https://wiki.openjdk.org/display/csr/Main) request is already required for this pull request.");
+            assertLastCommentContains(pr, "an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
             // Use `/csr unneeded` to revert the change.
             pr.addComment("/csr unneeded");
             TestBotRunner.runPeriodicItems(prBot);
@@ -1002,9 +1000,9 @@ class CSRCommandTests {
             backportCsr.setProperty("fixVersions", JSON.array().add("17").add("11").add("8"));
             // Set the `version` in `.jcheck/conf` as 11.
             localRepo.checkout(localRepo.defaultBranch());
-            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"), StandardCharsets.UTF_8);
+            defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
             newConf = defaultConf.replace("version=17", "version=11");
-            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf, StandardCharsets.UTF_8);
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
             localRepo.add(localRepo.root().resolve(".jcheck/conf"));
             confHash = localRepo.commit("Set the version as 11", "duke", "duke@openjdk.org");
             localRepo.push(confHash, author.authenticatedUrl(), "master", true);
@@ -1017,7 +1015,7 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().body().contains("- [ ] " + generateCSRProgressMessage(backportCsr)));
             assertTrue(pr.store().labelNames().contains("csr"));
-            assertLastCommentContains(pr, "an approved [CSR](https://wiki.openjdk.org/display/csr/Main) request is already required for this pull request.");
+            assertLastCommentContains(pr, "an approved [CSR](" + CSR_PROCESS_LINK + ") request is already required for this pull request.");
             assertLastCommentContains(pr, "<!-- csr: 'needed' -->");
             // Set the backport CSR to have multiple fix versions, excluded 11.
             backportCsr.setProperty("fixVersions", JSON.array().add("17").add("8"));
@@ -1027,8 +1025,8 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertFalse(pr.store().body().contains("- [ ] " + generateCSRProgressMessage(backportCsr)));
             assertFalse(pr.store().labelNames().contains("csr"));
-            assertTrue(pr.comments().get(pr.comments().size() - 2).body().contains("determined that a [CSR](https://wiki.openjdk.org/display/csr/Main) request " +
-                    "is not needed for this pull request."));
+            assertLastCommentContains(pr, "determined that a [CSR](" + CSR_PROCESS_LINK + ") request " +
+                    "is not needed for this pull request.");
 
             // re-run prBot.
             pr.addComment("/csr");
@@ -1036,9 +1034,9 @@ class CSRCommandTests {
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion 11 to be approved (needs to be created)"));
             assertTrue(pr.store().labelNames().contains("csr"));
             assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                    "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                     "is needed for this pull request.");
-            assertLastCommentContains(pr, "please create a [CSR](https://wiki.openjdk.org/display/csr/Main) request");
+            assertLastCommentContains(pr, "please create a [CSR](" + CSR_PROCESS_LINK + ") request");
             assertLastCommentContains(pr, "with the correct fix version");
             assertLastCommentContains(pr, "This pull request cannot be integrated until the CSR request is approved.");
         }
@@ -1102,7 +1100,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                    "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                     "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -1144,7 +1142,7 @@ class CSRCommandTests {
 
             // The bot should reply with a message that a CSR is needed
             assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                    "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                     "is needed for this pull request.");
             assertTrue(pr.store().labelNames().contains("csr"));
             // The PR body should contain the progress about CSR request
@@ -1275,11 +1273,124 @@ class CSRCommandTests {
             TestBotRunner.runPeriodicItems(prBot);
             assertTrue(pr.store().labelNames().contains("csr"));
             assertLastCommentContains(pr, "has indicated that a " +
-                    "[compatibility and specification](https://wiki.openjdk.org/display/csr/Main) (CSR) request " +
+                    "[compatibility and specification](" + CSR_PROCESS_LINK + ") (CSR) request " +
                     "is needed for this pull request.");
             assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion 0.1 to be approved (needs to be created)"));
             assertFalse(pr.store().body().contains(generateCSRProgressMessage(csr)));
             assertFalse(pr.store().body().contains(generateCSRProgressMessage(csr2)));
+        }
+    }
+
+    @Test
+    void testBackportCsrLabel(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issueProject = credentials.getIssueProject();
+            var bot = credentials.getHostedRepository();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+
+            var issue = issueProject.createIssue("This is the primary issue", List.of(), Map.of());
+            issue.setState(Issue.State.CLOSED);
+            issue.setProperty("issuetype", JSON.of("Bug"));
+            issue.setProperty("fixVersions", JSON.array().add("18"));
+
+            var csr = issueProject.createIssue("This is the primary CSR", List.of(), Map.of());
+            csr.setState(Issue.State.CLOSED);
+            csr.setProperty("issuetype", JSON.of("CSR"));
+            csr.setProperty("fixVersions", JSON.array().add("18"));
+            csr.setProperty("resolution", JSON.object().put("name", "Approved"));
+            issue.addLink(Link.create(csr, "csr for").build());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .enableCsr(true)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issueProject)
+                    .issuePRMap(issuePRMap)
+                    .build();
+            var csrIssueBot = new CSRIssueBot(issueProject, List.of(author), Map.of(bot.name(), prBot), issuePRMap);
+
+            // Run issue prBot once to initialize lastUpdatedAt
+            TestBotRunner.runPeriodicItems(csrIssueBot);
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Push a commit to the jdk18 branch
+            var jdk18Branch = localRepo.branch(masterHash, "jdk18");
+            localRepo.checkout(jdk18Branch);
+            var newFile = localRepo.root().resolve("a_new_file.txt");
+            Files.writeString(newFile, "a_new_file");
+            localRepo.add(newFile);
+            var issueNumber = issue.id().split("-")[1];
+            var commitMessage = issueNumber + ": This is the primary issue\n\nReviewed-by: integrationreviewer2";
+            var commitHash = localRepo.commit(commitMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(commitHash, author.authenticatedUrl(), "jdk18", true);
+
+            // Create a backport issue whose fix version is 17
+            var backportIssue = issueProject.createIssue("This is the backport issue", List.of(), Map.of());
+            backportIssue.setProperty("issuetype", JSON.of("Backport"));
+            backportIssue.setProperty("fixVersions", JSON.array().add("17"));
+            backportIssue.setState(Issue.State.OPEN);
+            issue.addLink(Link.create(backportIssue, "backported by").build());
+
+            // Create a backport CSR whose fix version is 17.
+            var backportCsr = issueProject.createIssue("This is the backport CSR", List.of(), Map.of());
+            backportCsr.setProperty("issuetype", JSON.of("CSR"));
+            backportCsr.setProperty("fixVersions", JSON.array().add("17"));
+            backportCsr.setState(Issue.State.OPEN);
+            backportIssue.addLink(Link.create(backportCsr, "csr for").build());
+
+            // Set the `version` in `.jcheck/conf` as 17 which is an available version.
+            localRepo.checkout(localRepo.defaultBranch());
+            var defaultConf = Files.readString(localRepo.root().resolve(".jcheck/conf"));
+            var newConf = defaultConf.replace("version=0.1", "version=17");
+            Files.writeString(localRepo.root().resolve(".jcheck/conf"), newConf);
+            localRepo.add(localRepo.root().resolve(".jcheck/conf"));
+            var confHash = localRepo.commit("Set the version as 17", "duke", "duke@openjdk.org");
+            localRepo.push(confHash, author.authenticatedUrl(), "master", true);
+            createBackport(localRepo, author, confHash, "edit1");
+            var pr = credentials.createPullRequest(author, "master", "edit1", "Backport " + commitHash);
+            PullRequestUtils.postPullRequestLinkComment(issue, pr);
+
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().body().contains("- [ ] Change requires CSR request [TEST-4](http://localhost/project/testTEST-4) to be approved"));
+            assertTrue(pr.store().labelNames().contains("csr"));
+            // The bot shouldn't post backport csr comment because there is a backport csr
+            assertTrue(pr.store().comments().stream().noneMatch(comment -> comment.body().contains("this backport may also need a CSR")));
+
+            // Change the fixVersion of the backportCSR
+            backportCsr.setProperty("fixVersions", JSON.array().add("19"));
+            TestBotRunner.runPeriodicItems(csrIssueBot);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().body().contains("- [ ] Change requires a CSR request matching fixVersion 17 to be approved (needs to be created)"));
+            assertTrue(pr.store().labelNames().contains("csr"));
+            // The bot shouldn't post backport csr comment because csr label is still there
+            assertTrue(pr.store().comments().stream().noneMatch(comment -> comment.body().contains("this backport may also need a CSR")));
+
+            // Use '/csr unneeded'
+            var prAsReviewer = reviewer.pullRequest(pr.id());
+            prAsReviewer.addComment("/csr unneeded");
+            TestBotRunner.runPeriodicItems(prBot);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertFalse(pr.store().labelNames().contains("csr"));
+            // The bot shouldn't post backport csr comment because csr label has been removed by command
+            assertTrue(pr.store().comments().stream().noneMatch(comment -> comment.body().contains("this backport may also need a CSR")));
+
+            // Require CSR again
+            prAsReviewer.addComment("/csr");
+            TestBotRunner.runPeriodicItems(prBot);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().labelNames().contains("csr"));
+            // The bot shouldn't post backport csr comment because csr label has been added by command
+            assertTrue(pr.store().comments().stream().noneMatch(comment -> comment.body().contains("this backport may also need a CSR")));
         }
     }
 }

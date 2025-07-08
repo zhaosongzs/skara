@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -177,8 +177,7 @@ class ArchiveItem {
                 return true;
             }
             if (tryFetch) {
-                localRepo.fetch(pr.repository().authenticatedUrl(), lastHead.hex(), false);
-                return true;
+                return localRepo.fetch(pr.repository().authenticatedUrl(), lastHead.hex(), false).isPresent();
             }
         } catch (IOException e) {
             return false;
@@ -419,7 +418,7 @@ class ArchiveItem {
             if (mentionedParent.isPresent()) {
                 return mentionedParent.get();
             } else {
-                return eligible.get(eligible.size() - 1);
+                return eligible.getLast();
             }
         }
     }
