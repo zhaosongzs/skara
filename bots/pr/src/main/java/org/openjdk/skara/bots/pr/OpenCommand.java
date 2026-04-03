@@ -71,6 +71,7 @@ public class OpenCommand implements CommandHandler {
             if (e.getStatusCode() == 422) {
                 reply.println("Validation failed: this pull request can't be reopened. " +
                         "The source branch may have been force-pushed or recreated.");
+                return;
             } else {
                 throw e;
             }
