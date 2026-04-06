@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.openjdk.skara.forge.Forge;
 import org.openjdk.skara.forge.ForgeFactory;
 import org.openjdk.skara.forge.internal.ForgeUtils;
@@ -47,25 +48,39 @@ public class GitLabForgeFactory implements ForgeFactory {
     @Override
     public Forge create(URI uri, Credential credential, JSONObject configuration) {
         var name = "GitLab";
-        if (configuration != null && configuration.contains("name")) {
-            name = configuration.get("name").asString();
-        }
         List<String> groups = List.of();
-        if (configuration != null && configuration.contains("groups")) {
-            groups = configuration.get("groups")
-                                  .stream()
-                                  .map(JSONValue::asString)
-                                  .toList();
+        String prTemplate = null;
+        if (configuration != null) {
+            if (configuration.contains("name")) {
+                name = configuration.get("name").asString();
+            }
+
+            if (configuration.contains("groups")) {
+                groups = configuration.get("groups")
+                                    .stream()
+                                    .map(JSONValue::asString)
+                                    .toList();
+            }
+
+            if (configuration.contains("prTemplate")) {
+                prTemplate = configuration.get("prTemplate")
+                    .asArray()
+                    .stream()
+                    .map(JSONValue::asString)
+                    .collect(Collectors.joining("\n"));
+            }
         }
+
         var useSsh = false;
         if (configuration != null && configuration.contains("sshkey") && credential != null) {
             ForgeUtils.configureSshKey(credential.username(), uri.getHost(), configuration.get("sshkey").asString());
             useSsh = true;
         }
+
         if (credential != null) {
-            return new GitLabHost(name, uri, useSsh, credential, groups);
+            return new GitLabHost(name, uri, useSsh, credential, groups, prTemplate);
         } else {
-            return new GitLabHost(name, uri, useSsh, groups);
+            return new GitLabHost(name, uri, useSsh, groups, prTemplate);
         }
     }
 }

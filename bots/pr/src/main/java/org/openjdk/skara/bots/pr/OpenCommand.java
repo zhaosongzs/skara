@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@ package org.openjdk.skara.bots.pr;
 import org.openjdk.skara.forge.PullRequest;
 import org.openjdk.skara.issuetracker.Comment;
 import org.openjdk.skara.issuetracker.Issue;
+import org.openjdk.skara.network.UncheckedRestException;
 
 import java.io.PrintWriter;
 import java.util.List;
@@ -64,8 +65,17 @@ public class OpenCommand implements CommandHandler {
             return;
 
         }
-
-        pr.setState(Issue.State.OPEN);
+        try {
+            pr.setState(Issue.State.OPEN);
+        } catch (UncheckedRestException e) {
+            if (e.getStatusCode() == 422) {
+                reply.println("Validation failed: this pull request can't be reopened. " +
+                        "The source branch may have been force-pushed or recreated.");
+                return;
+            } else {
+                throw e;
+            }
+        }
         reply.println("This pull request is now open");
     }
 }
