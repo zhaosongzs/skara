@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -150,6 +150,27 @@ class CheckWorkItem extends PullRequestWorkItem {
                     project.isReviewer(username, censusVersion) + project.isCommitter(username, censusVersion) +
                     project.isAuthor(username, censusVersion);
         }
+    }
+
+    private List<Comment> ensureTwoReviewersLabelMarker(List<Comment> comments) {
+        if (bot.twoReviewersLabels().isEmpty()) {
+            return comments;
+        }
+        if (Collections.disjoint(pr.labelNames(), bot.twoReviewersLabels())) {
+            return comments;
+        }
+
+        var botUser = pr.repository().forge().currentUser();
+        if (ReviewersTracker.additionalRequiredReviewers(botUser, comments).isPresent()) {
+            return comments;
+        }
+
+        var marker = ReviewersTracker.setReviewersMarker(2, "reviewers");
+        var markerComment = pr.addComment(
+                "Two-reviewer requirement has been enabled due to two-reviewers label configuration. " +
+                "It will remain until explicitly changed with `/reviewers`.\n" +
+                marker);
+        return Stream.concat(comments.stream(), Stream.of(markerComment)).toList();
     }
 
     /**
@@ -466,6 +487,7 @@ class CheckWorkItem extends PullRequestWorkItem {
         var hostedRepositoryPool = new HostedRepositoryPool(seedPath);
         CensusInstance census;
         var comments = prComments();
+        comments = ensureTwoReviewersLabelMarker(comments);
         comments = postPlaceholderForReadyComment(comments);
 
         if (pr.headHash().hex() == null) {

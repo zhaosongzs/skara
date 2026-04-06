@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -3878,6 +3878,67 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             assertFalse(pr.store().body().contains("Warning"));
+        }
+    }
+
+    @Test
+    void twoReviewersLabelRequiresTwoReviewers(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+
+            var author = credentials.getHostedRepository();
+            var reviewer1 = credentials.getHostedRepository();
+            var reviewer2 = credentials.getHostedRepository();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer1.forge().currentUser().id())
+                    .addReviewer(reviewer2.forge().currentUser().id());
+            var checkBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+            pr.addLabel("hotspot");
+
+            // Check the status
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            // The PR should now be ready for review, but not for integration
+            assertTrue(pr.store().labelNames().contains("rfr"));
+            assertFalse(pr.store().labelNames().contains("ready"));
+
+            // One approval should not be enough
+            var reviewer1Pr = reviewer1.pullRequest(pr.id());
+            reviewer1Pr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 2 [Reviewers]"));
+
+            pr.removeLabel("hotspot");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 2 [Reviewers]"));
+
+            // Explicit reset should override sticky two-reviewer requirement
+            reviewer1Pr.addComment("/reviewers 1 reviewer");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            // Two approvals should now make it ready
+            var reviewer2Pr = reviewer2.pullRequest(pr.id());
+            reviewer2Pr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(checkBot);
+            assertTrue(pr.store().labelNames().contains("ready"));
         }
     }
 }

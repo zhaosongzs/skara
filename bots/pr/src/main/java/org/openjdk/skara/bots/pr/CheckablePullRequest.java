@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,15 +50,19 @@ public class CheckablePullRequest {
     private final boolean useStaleReviews;
     private final List<String> confOverride;
     private final List<Comment> comments;
+    private final Set<String> twoReviewersLabels;
     private final MergePullRequestReviewConfiguration reviewMerge;
     private final ReviewCoverage reviewCoverage;
 
     CheckablePullRequest(PullRequest pr, Repository localRepo, boolean useStaleReviews,
-            HostedRepository jcheckRepo, String jcheckName, String jcheckRef, List<Comment> comments, MergePullRequestReviewConfiguration reviewMerge, ReviewCoverage reviewCoverage) {
+            HostedRepository jcheckRepo, String jcheckName, String jcheckRef, List<Comment> comments,
+            Set<String> twoReviewersLabels,
+            MergePullRequestReviewConfiguration reviewMerge, ReviewCoverage reviewCoverage) {
         this.pr = pr;
         this.localRepo = localRepo;
         this.useStaleReviews = useStaleReviews;
         this.comments = comments;
+        this.twoReviewersLabels = twoReviewersLabels;
         this.reviewMerge = reviewMerge;
         this.reviewCoverage = reviewCoverage;
 
@@ -227,7 +231,8 @@ public class CheckablePullRequest {
         }
 
         var botUser = pr.repository().forge().currentUser();
-        var additional = AdditionalConfiguration.get(original.get(), botUser, comments, reviewMerge);
+        var additional = AdditionalConfiguration.get(original.get(), botUser, comments,
+                pr.labelNames(), twoReviewersLabels, reviewMerge);
         if (additional.isEmpty()) {
             return original.get();
         }
@@ -368,4 +373,5 @@ public class CheckablePullRequest {
                 .map(Contributor::username)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
+
 }
