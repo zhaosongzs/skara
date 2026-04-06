@@ -32,13 +32,9 @@ import java.util.*;
 
 public class AdditionalConfiguration {
     static List<String> get(JCheckConfiguration original, HostUser botUser, List<Comment> comments,
-                            Collection<String> labels, Set<String> twoReviewersLabels,
                             MergePullRequestReviewConfiguration reviewMerge) throws IOException {
         var ret = new ArrayList<String>();
         var additionalReviewers = ReviewersTracker.additionalRequiredReviewers(botUser, comments);
-        if (additionalReviewers.isEmpty() && labels.stream().anyMatch(twoReviewersLabels::contains)) {
-            additionalReviewers = Optional.of(new ReviewersTracker.AdditionalRequiredReviewers(2, "reviewers"));
-        }
         if (additionalReviewers.isEmpty() && reviewMerge == MergePullRequestReviewConfiguration.JCHECK) {
             return ret;
         }

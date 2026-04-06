@@ -490,4 +490,118 @@ class LabelerTests {
             assertEquals(Set.of("1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
         }
     }
+
+    @Test
+    void autoLabelAppliesTwoReviewersRule(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer1 = credentials.getHostedRepository();
+            var reviewer2 = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer1.forge().currentUser().id())
+                    .addReviewer(reviewer2.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR matching the automatic "hotspot" label
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            // Automatic labeling should apply hotspot and require two reviewers
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertTrue(pr.store().labelNames().contains("hotspot"));
+            assertTrue(pr.store().labelNames().contains("rfr"));
+
+            var reviewer1Pr = reviewer1.pullRequest(pr.id());
+            reviewer1Pr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(labelBot);
+
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 2 [Reviewers]"));
+
+            pr.removeLabel("hotspot");
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 2 [Reviewers]"));
+        }
+    }
+
+    @Test
+    void explicitReviewersCommandWinsOverTwoReviewersLabel(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer1 = credentials.getHostedRepository();
+            var reviewer2 = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer1.forge().currentUser().id())
+                    .addReviewer(reviewer2.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR matching the automatic "hotspot" label
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            // Explicit command immediately after PR creation should win
+            var reviewer1Pr = reviewer1.pullRequest(pr.id());
+            reviewer1Pr.addComment("/reviewers 1 reviewer");
+
+            TestBotRunner.runPeriodicItems(labelBot);
+            // First round handles command/labeler ordering; second round verifies resulting policy state
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertTrue(pr.store().labelNames().contains("hotspot"));
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            reviewer1Pr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(labelBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
+        }
+    }
 }

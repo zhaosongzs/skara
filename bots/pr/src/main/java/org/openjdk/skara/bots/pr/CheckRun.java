@@ -126,7 +126,6 @@ class CheckRun {
                 workItem.bot.confOverrideName(),
                 workItem.bot.confOverrideRef(),
                 comments,
-                workItem.bot.twoReviewersLabels(),
                 reviewMerge,
                 reviewCoverage);
     }

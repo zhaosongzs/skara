@@ -198,7 +198,6 @@ public class IntegrateCommand implements CommandHandler {
                     bot.confOverrideName(),
                     bot.confOverrideRef(),
                     allComments,
-                    bot.twoReviewersLabels(),
                     bot.reviewMerge(),
                     new ReviewCoverage(bot.useStaleReviews(), bot.acceptSimpleMerges(), localRepo, pr));
 

@@ -66,7 +66,7 @@ class AdditionalConfigurationTests {
             var jcheckConf = JCheck.parseConfiguration(localRepo, masterHash, List.of());
             assertTrue(jcheckConf.isPresent());
             var additional = AdditionalConfiguration.get(jcheckConf.get(), bot.forge().currentUser(),
-                                                         pr.comments(), pr.labelNames(), Set.of(),
+                                                         pr.comments(),
                                                          MergePullRequestReviewConfiguration.ALWAYS);
             var expected = List.of(
                 "[checks \"reviewers\"]",
@@ -82,46 +82,4 @@ class AdditionalConfigurationTests {
         }
     }
 
-    @Test
-    void shouldRequireTwoReviewersWhenTwoReviewersLabelPresent(TestInfo testInfo) throws IOException {
-        try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory()) {
-            var author = credentials.getHostedRepository();
-            var integrator = credentials.getHostedRepository();
-            var bot = credentials.getHostedRepository();
-
-            var censusBuilder = credentials.getCensusBuilder()
-                    .addReviewer(integrator.forge().currentUser().id())
-                    .addCommitter(author.forge().currentUser().id());
-            var prBot = PullRequestBot.newBuilder().repo(bot).censusRepo(censusBuilder.build()).build();
-
-            var localRepoFolder = tempFolder.path().resolve("localrepo");
-            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
-            var masterHash = localRepo.resolve("master").orElseThrow();
-            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
-
-            var editHash = CheckableRepository.appendAndCommit(localRepo);
-            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
-            var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
-            pr.addLabel("hotspot");
-
-            TestBotRunner.runPeriodicItems(prBot);
-
-            var jcheckConf = JCheck.parseConfiguration(localRepo, masterHash, List.of());
-            assertTrue(jcheckConf.isPresent());
-            var additional = AdditionalConfiguration.get(jcheckConf.get(), bot.forge().currentUser(),
-                    pr.comments(), pr.labelNames(), Set.of("hotspot"), MergePullRequestReviewConfiguration.ALWAYS);
-            var expected = List.of(
-                    "[checks \"reviewers\"]",
-                    "lead=0",
-                    "reviewers=2",
-                    "committers=0",
-                    "authors=0",
-                    "contributors=0",
-                    "minimum=disable",
-                    "merge=check"
-            );
-            assertEquals(expected, additional);
-        }
-    }
 }

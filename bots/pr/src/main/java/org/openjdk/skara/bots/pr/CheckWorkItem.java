@@ -487,8 +487,8 @@ class CheckWorkItem extends PullRequestWorkItem {
         var hostedRepositoryPool = new HostedRepositoryPool(seedPath);
         CensusInstance census;
         var comments = prComments();
-        comments = ensureTwoReviewersLabelMarker(comments);
         comments = postPlaceholderForReadyComment(comments);
+        comments = ensureTwoReviewersLabelMarker(comments);
 
         if (pr.headHash().hex() == null) {
             String text = "The head hash of this pull request is missing. " +

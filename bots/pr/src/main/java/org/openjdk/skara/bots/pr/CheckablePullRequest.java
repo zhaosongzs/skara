@@ -50,19 +50,16 @@ public class CheckablePullRequest {
     private final boolean useStaleReviews;
     private final List<String> confOverride;
     private final List<Comment> comments;
-    private final Set<String> twoReviewersLabels;
     private final MergePullRequestReviewConfiguration reviewMerge;
     private final ReviewCoverage reviewCoverage;
 
     CheckablePullRequest(PullRequest pr, Repository localRepo, boolean useStaleReviews,
             HostedRepository jcheckRepo, String jcheckName, String jcheckRef, List<Comment> comments,
-            Set<String> twoReviewersLabels,
             MergePullRequestReviewConfiguration reviewMerge, ReviewCoverage reviewCoverage) {
         this.pr = pr;
         this.localRepo = localRepo;
         this.useStaleReviews = useStaleReviews;
         this.comments = comments;
-        this.twoReviewersLabels = twoReviewersLabels;
         this.reviewMerge = reviewMerge;
         this.reviewCoverage = reviewCoverage;
 
@@ -231,8 +228,7 @@ public class CheckablePullRequest {
         }
 
         var botUser = pr.repository().forge().currentUser();
-        var additional = AdditionalConfiguration.get(original.get(), botUser, comments,
-                pr.labelNames(), twoReviewersLabels, reviewMerge);
+        var additional = AdditionalConfiguration.get(original.get(), botUser, comments, reviewMerge);
         if (additional.isEmpty()) {
             return original.get();
         }
