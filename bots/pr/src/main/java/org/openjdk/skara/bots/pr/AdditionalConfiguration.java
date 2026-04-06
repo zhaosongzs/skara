@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,8 +31,7 @@ import java.io.IOException;
 import java.util.*;
 
 public class AdditionalConfiguration {
-    static List<String> get(JCheckConfiguration original, HostUser botUser, List<Comment> comments,
-                            MergePullRequestReviewConfiguration reviewMerge) throws IOException {
+    static List<String> get(JCheckConfiguration original, HostUser botUser, List<Comment> comments, MergePullRequestReviewConfiguration reviewMerge) throws IOException {
         var ret = new ArrayList<String>();
         var additionalReviewers = ReviewersTracker.additionalRequiredReviewers(botUser, comments);
         if (additionalReviewers.isEmpty() && reviewMerge == MergePullRequestReviewConfiguration.JCHECK) {

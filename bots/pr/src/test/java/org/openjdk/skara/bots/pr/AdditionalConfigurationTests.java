@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,8 +66,7 @@ class AdditionalConfigurationTests {
             var jcheckConf = JCheck.parseConfiguration(localRepo, masterHash, List.of());
             assertTrue(jcheckConf.isPresent());
             var additional = AdditionalConfiguration.get(jcheckConf.get(), bot.forge().currentUser(),
-                                                         pr.comments(),
-                                                         MergePullRequestReviewConfiguration.ALWAYS);
+                                                         pr.comments(), MergePullRequestReviewConfiguration.ALWAYS);
             var expected = List.of(
                 "[checks \"reviewers\"]",
                 "lead=0",
@@ -81,5 +80,4 @@ class AdditionalConfigurationTests {
             assertEquals(expected, additional);
         }
     }
-
 }

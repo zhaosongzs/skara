@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,8 +54,7 @@ public class CheckablePullRequest {
     private final ReviewCoverage reviewCoverage;
 
     CheckablePullRequest(PullRequest pr, Repository localRepo, boolean useStaleReviews,
-            HostedRepository jcheckRepo, String jcheckName, String jcheckRef, List<Comment> comments,
-            MergePullRequestReviewConfiguration reviewMerge, ReviewCoverage reviewCoverage) {
+            HostedRepository jcheckRepo, String jcheckName, String jcheckRef, List<Comment> comments, MergePullRequestReviewConfiguration reviewMerge, ReviewCoverage reviewCoverage) {
         this.pr = pr;
         this.localRepo = localRepo;
         this.useStaleReviews = useStaleReviews;
@@ -369,5 +368,4 @@ public class CheckablePullRequest {
                 .map(Contributor::username)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
-
 }
