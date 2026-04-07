@@ -165,7 +165,7 @@ class CheckWorkItem extends PullRequestWorkItem {
             return comments;
         }
 
-        var marker = ReviewersTracker.setReviewersMarker(2, "reviewers");
+        var marker = ReviewersTracker.setReviewersMarker(2, "authors");
         var markerComment = pr.addComment(
                 "Two-reviewer requirement has been enabled due to two-reviewers label configuration. " +
                 "It will remain until explicitly changed with `/reviewers`.\n" +

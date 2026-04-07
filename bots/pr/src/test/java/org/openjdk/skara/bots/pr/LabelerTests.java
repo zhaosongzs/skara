@@ -541,11 +541,13 @@ class LabelerTests {
             TestBotRunner.runPeriodicItems(labelBot);
 
             assertFalse(pr.store().labelNames().contains("ready"));
-            assertTrue(pr.store().body().contains("2 reviews required, with at least 2 [Reviewers]"));
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 1 [Reviewer](https://openjdk.org/bylaws#reviewer), " +
+                    "1 [Author](https://openjdk.org/bylaws#author)"));
 
             pr.removeLabel("hotspot");
             TestBotRunner.runPeriodicItems(labelBot);
-            assertTrue(pr.store().body().contains("2 reviews required, with at least 2 [Reviewers]"));
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 1 [Reviewer](https://openjdk.org/bylaws#reviewer), " +
+                    "1 [Author](https://openjdk.org/bylaws#author)"));
         }
     }
 
