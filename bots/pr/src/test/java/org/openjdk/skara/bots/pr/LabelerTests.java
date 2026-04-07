@@ -535,6 +535,8 @@ class LabelerTests {
             TestBotRunner.runPeriodicItems(labelBot);
             assertTrue(pr.store().labelNames().contains("hotspot"));
             assertTrue(pr.store().labelNames().contains("rfr"));
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertLastCommentContains(pr, "This can be overridden with the `/reviewers` command.");
 
             var reviewer1Pr = reviewer1.pullRequest(pr.id());
             reviewer1Pr.addReview(Review.Verdict.APPROVED, "Approved");

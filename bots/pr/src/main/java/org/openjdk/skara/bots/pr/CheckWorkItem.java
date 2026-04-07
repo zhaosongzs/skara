@@ -165,10 +165,22 @@ class CheckWorkItem extends PullRequestWorkItem {
             return comments;
         }
 
+        var matchingLabels = pr.labelNames().stream()
+                .filter(label -> bot.twoReviewersLabels().contains(label))
+                .sorted()
+                .toList();
+        var labelsNoun = matchingLabels.size() == 1 ? "this label" : "these labels";
+
         var marker = ReviewersTracker.setReviewersMarker(2, "authors");
+
+        var matchingLabelsList = matchingLabels.stream()
+                .map(label -> "`" + label + "`")
+                .collect(Collectors.joining(", "));
+
         var markerComment = pr.addComment(
-                "Two-reviewer requirement has been enabled due to two-reviewers label configuration. " +
-                "It will remain until explicitly changed with `/reviewers`.\n" +
+                "The total number of required reviews for this PR has been set to 2 based on the presence of " +
+                labelsNoun + ": " + matchingLabelsList + ". " +
+                "This can be overridden with the `/reviewers` command.\n" +
                 marker);
         return Stream.concat(comments.stream(), Stream.of(markerComment)).toList();
     }
