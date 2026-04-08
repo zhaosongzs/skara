@@ -153,6 +153,39 @@ class CheckWorkItem extends PullRequestWorkItem {
         }
     }
 
+    private List<Comment> ensureTwoReviewersLabelMarker(List<Comment> comments) {
+        if (bot.twoReviewersLabels().isEmpty()) {
+            return comments;
+        }
+        if (Collections.disjoint(pr.labelNames(), bot.twoReviewersLabels())) {
+            return comments;
+        }
+
+        var botUser = pr.repository().forge().currentUser();
+        if (ReviewersTracker.additionalRequiredReviewers(botUser, comments).isPresent()) {
+            return comments;
+        }
+
+        var matchingLabels = pr.labelNames().stream()
+                .filter(label -> bot.twoReviewersLabels().contains(label))
+                .sorted()
+                .toList();
+        var labelsNoun = matchingLabels.size() == 1 ? "this label" : "these labels";
+
+        var marker = ReviewersTracker.setReviewersMarker(2, "authors");
+
+        var matchingLabelsList = matchingLabels.stream()
+                .map(label -> "`" + label + "`")
+                .collect(Collectors.joining(", "));
+
+        var markerComment = pr.addComment(
+                "The total number of required reviews for this PR has been set to 2 based on the presence of " +
+                labelsNoun + ": " + matchingLabelsList + ". " +
+                "This can be overridden with the `/reviewers` command.\n" +
+                marker);
+        return Stream.concat(comments.stream(), Stream.of(markerComment)).toList();
+    }
+
     /**
      * Provides cached fetching of issues from the IssueTracker.
      * @param shortId Short id of issue to fetch, e.g. the id of an issue is TEST-123, then the short id of the issue is 123
@@ -468,6 +501,7 @@ class CheckWorkItem extends PullRequestWorkItem {
         CensusInstance census;
         var comments = prComments();
         comments = postPlaceholderForReadyComment(comments);
+        comments = ensureTwoReviewersLabelMarker(comments);
 
         if (pr.headHash().hex() == null) {
             String text = "The head hash of this pull request is missing. " +
