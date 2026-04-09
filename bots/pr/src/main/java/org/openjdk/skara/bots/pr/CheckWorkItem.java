@@ -63,6 +63,8 @@ class CheckWorkItem extends PullRequestWorkItem {
     private static final Pattern BACKPORT_ISSUE_TITLE_PATTERN = Pattern.compile("^Backport\\s*(?:(?<prefix>[A-Za-z][A-Za-z0-9]+)-)?(?<id>[0-9]+)\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern METADATA_COMMENTS_PATTERN = Pattern.compile(
             "<!-- (?:backport)|(?:(add|remove) (?:contributor|reviewer))|(?:summary: ')|(?:solves: ')|(?:additional required reviewers)|(?:jep: ')|(?:csr: ')|(?:trailer:)");
+    private static final String TWO_REVIEWERS_APPLIED_MARKER = "<!-- two-reviewers applied -->";
+    private static final String TWO_REVIEWERS_CLEARED_MARKER = "<!-- two-reviewers cleared -->";
     private static final String ELLIPSIS = "…";
     protected static final String FORCE_PUSH_MARKER = "<!-- force-push suggestion -->";
     protected static final String FORCE_PUSH_SUGGESTION= """
@@ -157,33 +159,60 @@ class CheckWorkItem extends PullRequestWorkItem {
         if (bot.twoReviewersLabels().isEmpty()) {
             return comments;
         }
-        if (Collections.disjoint(pr.labelNames(), bot.twoReviewersLabels())) {
-            return comments;
-        }
 
         var botUser = pr.repository().forge().currentUser();
-        if (ReviewersTracker.additionalRequiredReviewers(botUser, comments).isPresent()) {
+        // If there is any user issued reviewers command, don't override it
+        var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(botUser, comments);
+        if (additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source().equals("user")) {
             return comments;
         }
 
-        var matchingLabels = pr.labelNames().stream()
-                .filter(label -> bot.twoReviewersLabels().contains(label))
-                .sorted()
-                .toList();
-        var labelsNoun = matchingLabels.size() == 1 ? "this label" : "these labels";
+        var latestTwoReviewersComment = comments.stream()
+                .filter(comment -> comment.author().equals(pr.repository().forge().currentUser()))
+                .filter(comment -> comment.body().contains(TWO_REVIEWERS_APPLIED_MARKER) || comment.body().contains(TWO_REVIEWERS_CLEARED_MARKER))
+                .reduce((a, b) -> b);
 
-        var marker = ReviewersTracker.setReviewersMarker(2, "authors");
+        if (pr.labelNames().contains("backport") || BACKPORT_ISSUE_TITLE_PATTERN.matcher(pr.title()).matches()
+                || BACKPORT_HASH_TITLE_PATTERN.matcher(pr.title()).matches() || PullRequestUtils.isMerge(pr)) {
+            // Backport or Merge PR
+            if (latestTwoReviewersComment.isEmpty()) {
+                return comments;
+            } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_CLEARED_MARKER)) {
+                return comments;
+            } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_APPLIED_MARKER)) {
+                var marker = ReviewersTracker.setReviewersMarker(0, "authors", "bot");
+                var reviewersClearedComment = pr.addComment("This PR is now a backport or merge PR, so the extra reviewers requirement has been cleared.\n"
+                        + marker + "\n" + TWO_REVIEWERS_CLEARED_MARKER);
+                return Stream.concat(comments.stream(), Stream.of(reviewersClearedComment)).toList();
+            }
+        } else {
+            // Normal PR
+            if (Collections.disjoint(pr.labelNames(), bot.twoReviewersLabels())) {
+                return comments;
+            }
 
-        var matchingLabelsList = matchingLabels.stream()
-                .map(label -> "`" + label + "`")
-                .collect(Collectors.joining(", "));
+            if (latestTwoReviewersComment.isEmpty() || latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_CLEARED_MARKER)) {
+                var matchingLabels = pr.labelNames().stream()
+                        .filter(label -> bot.twoReviewersLabels().contains(label))
+                        .sorted()
+                        .toList();
+                var labelsNoun = matchingLabels.size() == 1 ? "this label" : "these labels";
 
-        var markerComment = pr.addComment(
-                "The total number of required reviews for this PR has been set to 2 based on the presence of " +
-                labelsNoun + ": " + matchingLabelsList + ". " +
-                "This can be overridden with the `/reviewers` command.\n" +
-                marker);
-        return Stream.concat(comments.stream(), Stream.of(markerComment)).toList();
+                var marker = ReviewersTracker.setReviewersMarker(2, "authors", "bot");
+
+                var matchingLabelsList = matchingLabels.stream()
+                        .map(label -> "`" + label + "`")
+                        .collect(Collectors.joining(", "));
+
+                var reviewersAppliedComment = pr.addComment(
+                        "The total number of required reviews for this PR has been set to 2 based on the presence of " +
+                                labelsNoun + ": " + matchingLabelsList + ". " +
+                                "This can be overridden with the `/reviewers` command.\n" +
+                                marker + "\n" + TWO_REVIEWERS_APPLIED_MARKER);
+                return Stream.concat(comments.stream(), Stream.of(reviewersAppliedComment)).toList();
+            }
+        }
+        return comments;
     }
 
     /**

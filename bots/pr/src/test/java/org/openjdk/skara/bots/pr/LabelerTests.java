@@ -554,6 +554,58 @@ class LabelerTests {
     }
 
     @Test
+    void twoReviewersRuleClearedForBackportPR(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .build();
+
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+
+            pr.addLabel("backport");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "This PR is now a backport or merge PR, so the extra reviewers requirement has been cleared.");
+
+            pr.removeLabel("backport");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+        }
+    }
+
+    @Test
     void explicitReviewersCommandWinsOverTwoReviewersLabel(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory()) {

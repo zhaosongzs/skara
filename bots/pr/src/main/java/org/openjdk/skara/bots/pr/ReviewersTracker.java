@@ -28,15 +28,18 @@ import org.openjdk.skara.jcheck.JCheckConfiguration;
 
 import java.util.*;
 import java.util.regex.*;
-import java.util.stream.Collectors;
 
 class ReviewersTracker {
-    private static final String REVIEWERS_MARKER = "<!-- additional required reviewers id marker (%d) (%s) -->";
+    private static final String REVIEWERS_MARKER = "<!-- additional required reviewers id marker (%d) (%s) (%s)-->";
     private static final Pattern REVIEWERS_MARKER_PATTERN = Pattern.compile(
-            "<!-- additional required reviewers id marker \\((\\d+)\\) \\((\\w+)\\) -->");
+            "<!-- additional required reviewers id marker \\((\\d+)\\) \\((\\w+)\\)(?: \\(([^)]*)\\))?\\s*-->");
 
     static String setReviewersMarker(int numReviewers, String role) {
-        return String.format(REVIEWERS_MARKER, numReviewers, role);
+        return setReviewersMarker(numReviewers, role, "user");
+    }
+
+    static String setReviewersMarker(int numReviewers, String role, String source) {
+        return String.format(REVIEWERS_MARKER, numReviewers, role, source);
     }
 
     static LinkedHashMap<String, Integer> updatedRoleLimits(JCheckConfiguration checkConfiguration, int count, String role) {
@@ -95,10 +98,16 @@ class ReviewersTracker {
     static class AdditionalRequiredReviewers {
         private int number;
         private String role;
+        private String source;
 
         AdditionalRequiredReviewers(int number, String role) {
+            this(number, role, "user");
+        }
+
+        AdditionalRequiredReviewers(int number, String role, String source) {
             this.number = number;
             this.role = role;
+            this.source = source;
         }
 
         int number() {
@@ -108,6 +117,10 @@ class ReviewersTracker {
         String role() {
             return role;
         }
+
+        String source() {
+            return source;
+        }
     }
 
     static Optional<AdditionalRequiredReviewers> additionalRequiredReviewers(HostUser botUser, List<Comment> comments) {
@@ -115,11 +128,15 @@ class ReviewersTracker {
                                        .filter(comment -> comment.author().equals(botUser))
                                        .map(comment -> REVIEWERS_MARKER_PATTERN.matcher(comment.body()))
                                        .filter(Matcher::find)
-                                       .collect(Collectors.toList());
+                                       .toList();
         if (reviewersActions.isEmpty()) {
             return Optional.empty();
         }
         var last = reviewersActions.getLast();
-        return Optional.of(new AdditionalRequiredReviewers(Integer.parseInt(last.group(1)), last.group(2)));
+        var source = last.group(3);
+        if (source == null || source.isBlank()) {
+            source = "user";
+        }
+        return Optional.of(new AdditionalRequiredReviewers(Integer.parseInt(last.group(1)), last.group(2), source));
     }
 }
