@@ -47,6 +47,7 @@ import java.util.stream.*;
 
 import static org.openjdk.skara.bots.common.PullRequestConstants.*;
 import static org.openjdk.skara.bots.pr.LabelerWorkItem.INITIAL_LABEL_MESSAGE;
+import static org.openjdk.skara.bots.pr.ReviewersTracker.DEFAULT_SOURCE;
 
 class CheckRun {
     public static final String MSG_EMPTY_BODY = "The pull request body must not be empty.";
@@ -85,7 +86,7 @@ class CheckRun {
     private final boolean reviewCleanBackport;
     private final List<String> requiredCheckedLines;
     private final Approval approval;
-    private final boolean reviewersCommandIssued;
+    private final boolean reviewersCommandIssuedByUser;
     private final ReviewCoverage reviewCoverage;
 
     private Duration expiresIn;
@@ -112,10 +113,11 @@ class CheckRun {
         this.reviewCleanBackport = reviewCleanBackport;
         this.approval = approval;
         this.requiredCheckedLines = requiredCheckedLines;
-        this.reviewersCommandIssued = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments).isPresent();
+        var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments);
+        this.reviewersCommandIssuedByUser = additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source() == DEFAULT_SOURCE;
 
         // If reviewers command is issued, enable reviewers check for merge pull requests
-        if (reviewersCommandIssued) {
+        if (reviewersCommandIssuedByUser) {
             reviewMerge = MergePullRequestReviewConfiguration.ALWAYS;
         }
 
@@ -1527,7 +1529,7 @@ class CheckRun {
             integrationBlockers.addAll(mergeJCheckMessageWithTargetConf);
             integrationBlockers.addAll(mergeJCheckMessageWithCommitConf);
 
-            var reviewNeeded = !isCleanBackport || reviewCleanBackport || reviewersCommandIssued;
+            var reviewNeeded = !isCleanBackport || reviewCleanBackport || reviewersCommandIssuedByUser;
 
             // Calculate and update the status message if needed
             var statusMessage = getStatusMessage(visitor, additionalErrors, additionalProgresses, integrationBlockers, warnings,

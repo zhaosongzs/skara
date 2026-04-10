@@ -596,12 +596,96 @@ class LabelerTests {
             pr.addLabel("backport");
             TestBotRunner.runPeriodicItems(labelBot);
             TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "This PR is now a backport or merge PR, so the extra reviewers requirement has been cleared.");
+            assertLastCommentContains(pr, "This PR is now a backport PR, so the extra reviewers requirement has been cleared.");
 
             pr.removeLabel("backport");
             TestBotRunner.runPeriodicItems(labelBot);
             TestBotRunner.runPeriodicItems(labelBot);
             assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+        }
+    }
+
+    @Test
+    void twoReviewersRuleClearedForMergeStylePR(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .reviewMerge(MergePullRequestReviewConfiguration.ALWAYS)
+                    .build();
+
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+            var otherHash1 = CheckableRepository.appendAndCommit(localRepo, "First change in other",
+                    "First other\n\nReviewed-by: integrationreviewer2");
+            localRepo.push(otherHash1, author.authenticatedUrl(), "other", true);
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertTrue(pr.store().body().contains("2 reviews required"));
+
+            // Convert to Merge Style PR
+            pr.setTitle("Merge " + author.name() + ":other");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "This PR is now a merge PR, so the extra reviewers requirement has been cleared.");
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            // Convert back to normal PR
+            pr.setTitle("123: Not a merge PR");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertTrue(pr.store().body().contains("2 reviews required"));
+
+            // Convert to Merge Style PR again
+            pr.setTitle("Merge " + author.name() + ":other");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "This PR is now a merge PR, so the extra reviewers requirement has been cleared.");
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            // Issue a reviewers comment
+            var reviewPR = reviewer.pullRequest(pr.id());
+            reviewPR.addComment("/reviewers 4");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR (including the jcheck configuration and the last /reviewers command) is now set to 4");
+            assertTrue(pr.store().body().contains("4 reviews required"));
+
+            //Convert back to normal PR
+            pr.setTitle("123: Not a merge PR");
+            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(labelBot);
+            // Shouldn't have the two reviewers comment posted
+            assertLastCommentContains(pr, "The total number of required reviews for this PR (including the jcheck configuration and the last /reviewers command) is now set to 4");
+            assertTrue(pr.store().body().contains("4 reviews required"));
         }
     }
 
