@@ -23,6 +23,7 @@
 package org.openjdk.skara.bots.pr;
 
 import org.openjdk.skara.forge.*;
+import org.openjdk.skara.jcheck.ReviewersCheck;
 import org.openjdk.skara.test.*;
 
 import org.junit.jupiter.api.*;
@@ -556,52 +557,80 @@ class LabelerTests {
     @Test
     void twoReviewersRuleClearedForBackportPR(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory()) {
-            var author = credentials.getHostedRepository();
-            var reviewer = credentials.getHostedRepository();
+             var tempFolder = new TemporaryDirectory(false)) {
 
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
             var labelConfiguration = LabelConfigurationJson.builder()
                     .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
                     .build();
-            var censusBuilder = credentials.getCensusBuilder()
-                    .addAuthor(author.forge().currentUser().id())
-                    .addReviewer(reviewer.forge().currentUser().id());
-            var labelBot = PullRequestBot.newBuilder()
-                    .repo(author)
+            var bot = PullRequestBot.newBuilder()
+                    .repo(integrator)
                     .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
                     .labelConfiguration(labelConfiguration)
                     .twoReviewersLabels(Set.of("hotspot"))
+                    .issuePRMap(new HashMap<>())
+                    .reviewCleanBackport(true)
                     .build();
 
-            var localRepoFolder = tempFolder.path();
-            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
             var masterHash = localRepo.resolve("master").orElseThrow();
             localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
 
-            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            var releaseBranch = localRepo.branch(masterHash, "release");
+            localRepo.checkout(releaseBranch);
+            var newFile = localRepo.root().resolve("hotspot.txt");
+            Files.writeString(newFile, "hello");
+            localRepo.add(newFile);
+            var issue1 = credentials.createIssue(issues, "An issue");
+            var issue1Number = issue1.id().split("-")[1];
+            var originalMessage = issue1Number + ": An issue\n" +
+                    "\n" +
+                    "Reviewed-by: integrationreviewer2";
+            var releaseHash = localRepo.commit(originalMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(releaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+            // "backport" the new file to the master branch
+            localRepo.checkout(localRepo.defaultBranch());
+            var editBranch = localRepo.branch(masterHash, "edit");
+            localRepo.checkout(editBranch);
+            var newFile2 = localRepo.root().resolve("hotspot.txt");
+            Files.writeString(newFile2, "hello");
+            localRepo.add(newFile2);
+            var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
             localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            //var pr = credentials.createPullRequest(author, "master", "edit", "Backport " + releaseHash.hex(), List.of());
+            var pr = credentials.createPullRequest(author, "master", "edit", "Wrong title", List.of("body"));
 
-            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
-            Files.writeString(hotspotFile, "hotspot");
-            localRepo.add(hotspotFile);
-            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
-            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
-
-            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
-
-            TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
+            TestBotRunner.runPeriodicItems(bot);
+            TestBotRunner.runPeriodicItems(bot);
             assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertTrue(pr.store().body().contains("2 reviews required"));
 
-            pr.addLabel("backport");
-            TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "This PR is now a backport PR, so the extra reviewers requirement has been cleared.");
-
-            pr.removeLabel("backport");
-            TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            // Correct the title
+            pr.setTitle("Backport " + releaseHash.hex());
+            TestBotRunner.runPeriodicItems(bot);
+            TestBotRunner.runPeriodicItems(bot);
+            var comments = pr.comments();
+            // Two reviewers requirement should be cleared
+            var twoReviewersClearedComment = comments.get(3).body();
+            assertTrue(twoReviewersClearedComment.contains("This PR is now a backport PR, so the extra reviewers requirement has been cleared."));
+            assertTrue(pr.store().body().contains("1 review required"));
+            // The bot should reply with a backport message
+            var backportComment = comments.get(4).body();
+            assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
+            assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
+            assertEquals(issue1Number + ": An issue", pr.store().title());
+            assertTrue(pr.store().labelNames().contains("backport"));
+            assertTrue(pr.store().labelNames().contains("clean"));
         }
     }
 

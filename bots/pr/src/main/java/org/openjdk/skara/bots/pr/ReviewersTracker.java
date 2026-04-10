@@ -30,7 +30,7 @@ import java.util.*;
 import java.util.regex.*;
 
 class ReviewersTracker {
-    protected static final String DEFAULT_SOURCE = "user";
+    static final Source DEFAULT_SOURCE = Source.USER;
     private static final String REVIEWERS_MARKER = "<!-- additional required reviewers id marker (%d) (%s) (%s)-->";
     private static final Pattern REVIEWERS_MARKER_PATTERN = Pattern.compile(
             "<!-- additional required reviewers id marker \\((\\d+)\\) \\((\\w+)\\)(?: \\(([^)]*)\\))?\\s*-->");
@@ -39,8 +39,8 @@ class ReviewersTracker {
         return setReviewersMarker(numReviewers, role, DEFAULT_SOURCE);
     }
 
-    static String setReviewersMarker(int numReviewers, String role, String source) {
-        return String.format(REVIEWERS_MARKER, numReviewers, role, source);
+    static String setReviewersMarker(int numReviewers, String role, Source source) {
+        return String.format(REVIEWERS_MARKER, numReviewers, role, source.value());
     }
 
     static LinkedHashMap<String, Integer> updatedRoleLimits(JCheckConfiguration checkConfiguration, int count, String role) {
@@ -96,16 +96,38 @@ class ReviewersTracker {
         return updatedLimits;
     }
 
+    enum Source {
+        USER("user"),
+        BOT("bot");
+
+        private final String value;
+
+        Source(String value) {
+            this.value = value;
+        }
+
+        String value() {
+            return value;
+        }
+
+        static Source fromValue(String value) {
+            return Arrays.stream(values())
+                    .filter(source -> source.value.equals(value))
+                    .findFirst()
+                    .orElse(USER);
+        }
+    }
+
     static class AdditionalRequiredReviewers {
         private int number;
         private String role;
-        private String source;
+        private Source source;
 
         AdditionalRequiredReviewers(int number, String role) {
             this(number, role, DEFAULT_SOURCE);
         }
 
-        AdditionalRequiredReviewers(int number, String role, String source) {
+        AdditionalRequiredReviewers(int number, String role, Source source) {
             this.number = number;
             this.role = role;
             this.source = source;
@@ -119,7 +141,7 @@ class ReviewersTracker {
             return role;
         }
 
-        String source() {
+        Source source() {
             return source;
         }
     }
@@ -134,10 +156,10 @@ class ReviewersTracker {
             return Optional.empty();
         }
         var last = reviewersActions.getLast();
-        var source = last.group(3);
-        if (source == null || source.isBlank()) {
-            source = DEFAULT_SOURCE;
-        }
+        var sourceValue = last.group(3);
+        var source = sourceValue == null || sourceValue.isBlank()
+                ? DEFAULT_SOURCE
+                : Source.fromValue(sourceValue);
         return Optional.of(new AdditionalRequiredReviewers(Integer.parseInt(last.group(1)), last.group(2), source));
     }
 }

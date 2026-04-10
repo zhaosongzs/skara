@@ -47,7 +47,6 @@ import java.util.stream.*;
 
 import static org.openjdk.skara.bots.common.PullRequestConstants.*;
 import static org.openjdk.skara.bots.pr.LabelerWorkItem.INITIAL_LABEL_MESSAGE;
-import static org.openjdk.skara.bots.pr.ReviewersTracker.DEFAULT_SOURCE;
 
 class CheckRun {
     public static final String MSG_EMPTY_BODY = "The pull request body must not be empty.";
@@ -114,7 +113,8 @@ class CheckRun {
         this.approval = approval;
         this.requiredCheckedLines = requiredCheckedLines;
         var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments);
-        this.reviewersCommandIssuedByUser = additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source() == DEFAULT_SOURCE;
+        this.reviewersCommandIssuedByUser = additionalRequiredReviewers.isPresent()
+                && additionalRequiredReviewers.get().source() == ReviewersTracker.Source.USER;
 
         // If reviewers command is issued, enable reviewers check for merge pull requests
         if (reviewersCommandIssuedByUser) {

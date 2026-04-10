@@ -53,7 +53,6 @@ import java.util.stream.Stream;
 import static org.openjdk.skara.bots.common.PullRequestConstants.*;
 import static org.openjdk.skara.bots.pr.CheckRun.MERGE_READY_MARKER;
 import static org.openjdk.skara.bots.pr.CheckRun.PLACEHOLDER_MARKER;
-import static org.openjdk.skara.bots.pr.ReviewersTracker.DEFAULT_SOURCE;
 import static org.openjdk.skara.forge.PullRequestUtils.mergeSourcePattern;
 
 class CheckWorkItem extends PullRequestWorkItem {
@@ -164,14 +163,14 @@ class CheckWorkItem extends PullRequestWorkItem {
         var botUser = pr.repository().forge().currentUser();
         // If there is any user issued reviewers command, don't override it
         var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(botUser, comments);
-        if (additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source().equals(DEFAULT_SOURCE)) {
+        if (additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source() == ReviewersTracker.Source.USER) {
             return comments;
         }
 
-        var latestTwoReviewersComment = comments.stream()
+        var latestTwoReviewersComment = comments.reversed().stream()
                 .filter(comment -> comment.author().equals(pr.repository().forge().currentUser()))
                 .filter(comment -> comment.body().contains(TWO_REVIEWERS_APPLIED_MARKER) || comment.body().contains(TWO_REVIEWERS_CLEARED_MARKER))
-                .reduce((a, b) -> b);
+                .findFirst();
 
         if (pr.labelNames().contains("backport") || BACKPORT_ISSUE_TITLE_PATTERN.matcher(pr.title()).matches()
                 || BACKPORT_HASH_TITLE_PATTERN.matcher(pr.title()).matches() || PullRequestUtils.isMerge(pr)) {
@@ -181,7 +180,7 @@ class CheckWorkItem extends PullRequestWorkItem {
             } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_CLEARED_MARKER)) {
                 return comments;
             } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_APPLIED_MARKER)) {
-                var marker = ReviewersTracker.setReviewersMarker(0, "authors", "bot");
+                var marker = ReviewersTracker.setReviewersMarker(0, "authors", ReviewersTracker.Source.BOT);
                 var prType = PullRequestUtils.isMerge(pr) ? "merge" : "backport";
                 var reviewersClearedComment = pr.addComment("This PR is now a " + prType + " PR, so the extra reviewers requirement has been cleared.\n"
                         + marker + "\n" + TWO_REVIEWERS_CLEARED_MARKER);
@@ -200,7 +199,7 @@ class CheckWorkItem extends PullRequestWorkItem {
                         .toList();
                 var labelsNoun = matchingLabels.size() == 1 ? "this label" : "these labels";
 
-                var marker = ReviewersTracker.setReviewersMarker(2, "authors", "bot");
+                var marker = ReviewersTracker.setReviewersMarker(2, "authors", ReviewersTracker.Source.BOT);
 
                 var matchingLabelsList = matchingLabels.stream()
                         .map(label -> "`" + label + "`")
