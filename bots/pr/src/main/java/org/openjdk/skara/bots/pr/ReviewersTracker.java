@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,12 +30,13 @@ import java.util.*;
 import java.util.regex.*;
 
 class ReviewersTracker {
+    protected static final String DEFAULT_SOURCE = "user";
     private static final String REVIEWERS_MARKER = "<!-- additional required reviewers id marker (%d) (%s) (%s)-->";
     private static final Pattern REVIEWERS_MARKER_PATTERN = Pattern.compile(
             "<!-- additional required reviewers id marker \\((\\d+)\\) \\((\\w+)\\)(?: \\(([^)]*)\\))?\\s*-->");
 
     static String setReviewersMarker(int numReviewers, String role) {
-        return setReviewersMarker(numReviewers, role, "user");
+        return setReviewersMarker(numReviewers, role, DEFAULT_SOURCE);
     }
 
     static String setReviewersMarker(int numReviewers, String role, String source) {
@@ -101,7 +102,7 @@ class ReviewersTracker {
         private String source;
 
         AdditionalRequiredReviewers(int number, String role) {
-            this(number, role, "user");
+            this(number, role, DEFAULT_SOURCE);
         }
 
         AdditionalRequiredReviewers(int number, String role, String source) {
@@ -135,7 +136,7 @@ class ReviewersTracker {
         var last = reviewersActions.getLast();
         var source = last.group(3);
         if (source == null || source.isBlank()) {
-            source = "user";
+            source = DEFAULT_SOURCE;
         }
         return Optional.of(new AdditionalRequiredReviewers(Integer.parseInt(last.group(1)), last.group(2), source));
     }

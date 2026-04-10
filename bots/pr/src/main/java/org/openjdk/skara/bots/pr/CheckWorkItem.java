@@ -53,6 +53,7 @@ import java.util.stream.Stream;
 import static org.openjdk.skara.bots.common.PullRequestConstants.*;
 import static org.openjdk.skara.bots.pr.CheckRun.MERGE_READY_MARKER;
 import static org.openjdk.skara.bots.pr.CheckRun.PLACEHOLDER_MARKER;
+import static org.openjdk.skara.bots.pr.ReviewersTracker.DEFAULT_SOURCE;
 import static org.openjdk.skara.forge.PullRequestUtils.mergeSourcePattern;
 
 class CheckWorkItem extends PullRequestWorkItem {
@@ -163,7 +164,7 @@ class CheckWorkItem extends PullRequestWorkItem {
         var botUser = pr.repository().forge().currentUser();
         // If there is any user issued reviewers command, don't override it
         var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(botUser, comments);
-        if (additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source().equals("user")) {
+        if (additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source().equals(DEFAULT_SOURCE)) {
             return comments;
         }
 
