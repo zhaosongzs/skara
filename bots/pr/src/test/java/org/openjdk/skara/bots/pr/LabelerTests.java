@@ -607,10 +607,8 @@ class LabelerTests {
             localRepo.add(newFile2);
             var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
             localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
-            //var pr = credentials.createPullRequest(author, "master", "edit", "Backport " + releaseHash.hex(), List.of());
             var pr = credentials.createPullRequest(author, "master", "edit", "Wrong title", List.of("body"));
 
-            TestBotRunner.runPeriodicItems(bot);
             TestBotRunner.runPeriodicItems(bot);
             assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
             assertTrue(pr.store().body().contains("2 reviews required"));
@@ -618,11 +616,10 @@ class LabelerTests {
             // Correct the title
             pr.setTitle("Backport " + releaseHash.hex());
             TestBotRunner.runPeriodicItems(bot);
-            TestBotRunner.runPeriodicItems(bot);
             var comments = pr.comments();
             // Two reviewers requirement should be cleared
             var twoReviewersClearedComment = comments.get(3).body();
-            assertTrue(twoReviewersClearedComment.contains("This PR is now a backport PR, so the extra reviewers requirement has been cleared."));
+            assertTrue(twoReviewersClearedComment.contains("This PR is now a backport PR, the extra reviewers requirement has been cleared."));
             assertTrue(pr.store().body().contains("1 review required"));
             // The bot should reply with a backport message
             var backportComment = comments.get(4).body();
@@ -675,20 +672,17 @@ class LabelerTests {
             var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
 
             TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
             assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
             assertTrue(pr.store().body().contains("2 reviews required"));
 
             // Convert to Merge Style PR
             pr.setTitle("Merge " + author.name() + ":other");
             TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "This PR is now a merge PR, so the extra reviewers requirement has been cleared.");
+            assertLastCommentContains(pr, "This PR is now a merge PR, the extra reviewers requirement has been cleared.");
             assertTrue(pr.store().body().contains("1 review required"));
 
             // Convert back to normal PR
             pr.setTitle("123: Not a merge PR");
-            TestBotRunner.runPeriodicItems(labelBot);
             TestBotRunner.runPeriodicItems(labelBot);
             assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
             assertTrue(pr.store().body().contains("2 reviews required"));
@@ -696,21 +690,18 @@ class LabelerTests {
             // Convert to Merge Style PR again
             pr.setTitle("Merge " + author.name() + ":other");
             TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "This PR is now a merge PR, so the extra reviewers requirement has been cleared.");
+            assertLastCommentContains(pr, "This PR is now a merge PR, the extra reviewers requirement has been cleared.");
             assertTrue(pr.store().body().contains("1 review required"));
 
             // Issue a reviewers comment
             var reviewPR = reviewer.pullRequest(pr.id());
             reviewPR.addComment("/reviewers 4");
             TestBotRunner.runPeriodicItems(labelBot);
-            TestBotRunner.runPeriodicItems(labelBot);
             assertLastCommentContains(pr, "The total number of required reviews for this PR (including the jcheck configuration and the last /reviewers command) is now set to 4");
             assertTrue(pr.store().body().contains("4 reviews required"));
 
             //Convert back to normal PR
             pr.setTitle("123: Not a merge PR");
-            TestBotRunner.runPeriodicItems(labelBot);
             TestBotRunner.runPeriodicItems(labelBot);
             // Shouldn't have the two reviewers comment posted
             assertLastCommentContains(pr, "The total number of required reviews for this PR (including the jcheck configuration and the last /reviewers command) is now set to 4");
