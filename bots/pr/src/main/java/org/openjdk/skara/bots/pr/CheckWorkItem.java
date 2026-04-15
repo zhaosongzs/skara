@@ -182,7 +182,7 @@ class CheckWorkItem extends PullRequestWorkItem {
             } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_APPLIED_MARKER)) {
                 var marker = ReviewersTracker.setReviewersMarker(0, "authors", ReviewersTracker.Source.BOT);
                 var prType = PullRequestUtils.isMerge(pr) ? "merge" : "backport";
-                var reviewersClearedComment = pr.addComment("This PR is now a " + prType + " PR, the extra reviewers requirement has been cleared.\n"
+                var reviewersClearedComment = pr.addComment("This is now a " + prType + " PR, the extra reviewers requirement has been cleared.\n"
                         + marker + "\n" + TWO_REVIEWERS_CLEARED_MARKER);
                 return Stream.concat(comments.stream(), Stream.of(reviewersClearedComment)).toList();
             }

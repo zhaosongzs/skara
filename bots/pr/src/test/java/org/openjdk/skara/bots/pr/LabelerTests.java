@@ -619,7 +619,7 @@ class LabelerTests {
             var comments = pr.comments();
             // Two reviewers requirement should be cleared
             var twoReviewersClearedComment = comments.get(3).body();
-            assertTrue(twoReviewersClearedComment.contains("This PR is now a backport PR, the extra reviewers requirement has been cleared."));
+            assertTrue(twoReviewersClearedComment.contains("This is now a backport PR, the extra reviewers requirement has been cleared."));
             assertTrue(pr.store().body().contains("1 review required"));
             // The bot should reply with a backport message
             var backportComment = comments.get(4).body();
@@ -678,7 +678,7 @@ class LabelerTests {
             // Convert to Merge Style PR
             pr.setTitle("Merge " + author.name() + ":other");
             TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "This PR is now a merge PR, the extra reviewers requirement has been cleared.");
+            assertLastCommentContains(pr, "This is now a merge PR, the extra reviewers requirement has been cleared.");
             assertTrue(pr.store().body().contains("1 review required"));
 
             // Convert back to normal PR
@@ -690,7 +690,7 @@ class LabelerTests {
             // Convert to Merge Style PR again
             pr.setTitle("Merge " + author.name() + ":other");
             TestBotRunner.runPeriodicItems(labelBot);
-            assertLastCommentContains(pr, "This PR is now a merge PR, the extra reviewers requirement has been cleared.");
+            assertLastCommentContains(pr, "This is now a merge PR, the extra reviewers requirement has been cleared.");
             assertTrue(pr.store().body().contains("1 review required"));
 
             // Issue a reviewers comment
