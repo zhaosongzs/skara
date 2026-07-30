@@ -132,6 +132,8 @@ public class CheckablePullRequest {
                             .reviewers(new ArrayList<>(reviewers));
         summary.ifPresent(commitMessageBuilder::summary);
 
+        commitMessageBuilder.customTrailers(Trailers.trailers(currentUser, comments));
+
         return String.join("\n", commitMessageBuilder.format(CommitMessageFormatters.v1));
     }
 
@@ -172,8 +174,12 @@ public class CheckablePullRequest {
                 throw new CommitFailure("Merge PRs can only be created by known OpenJDK authors.");
             }
 
-            var head = localRepo.lookup(pr.headHash()).orElseThrow();
-            author = head.author();
+            if (!pr.author().fullName().isBlank() && pr.author().email().isPresent()) {
+                author = new Author(pr.author().fullName(), pr.author().email().get());
+            } else {
+                var head = localRepo.lookup(pr.headHash()).orElseThrow();
+                author = head.author();
+            }
         } else {
             author = new Author(contributor.fullName().orElseThrow(), contributor.username() + "@" + censusDomain);
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -126,6 +126,11 @@ public class TestHost implements Forge, IssueTracker {
      * use this as the name of the repository.
      */
     public static final String NON_EXISTING_REPO = "non-existing-repo";
+    /**
+     * For tests that do not actually need a local repository on disk, use
+     * this as the name.
+     */
+    public static final String FAKE_REPO = "fake-repo";
 
     private final int currentUser;
     private HostData data;
@@ -146,6 +151,7 @@ public class TestHost implements Forge, IssueTracker {
         final Set<TemporaryDirectory> folders = new HashSet<>();
         private final Map<String, TestPullRequestStore> pullRequests = new HashMap<>();
         private final Map<String, TestIssueTrackerIssueStore> issues = new HashMap<>();
+        private String pullRequestTemplate = null;
     }
 
     // Map of org to map of user to MemberState
@@ -168,8 +174,21 @@ public class TestHost implements Forge, IssueTracker {
     }
 
     public static TestHost createNew(List<HostUser> users) {
+        return createNew(users, null);
+    }
+
+    public static TestHost createNew(List<HostUser> users, JSONObject conf) {
         var data = new HostData();
         data.users.addAll(users);
+        if (conf != null) {
+            if (conf.contains("prTemplate")) {
+                data.pullRequestTemplate = conf.get("prTemplate")
+                    .asArray()
+                    .stream()
+                    .map(JSONValue::asString)
+                    .collect(Collectors.joining("\n"));
+            }
+        }
         var host = new TestHost(data, 0);
         return host;
     }
@@ -219,12 +238,19 @@ public class TestHost implements Forge, IssueTracker {
     }
 
     @Override
+    public Optional<String> defaultPullRequestTemplate() {
+        return Optional.ofNullable(data.pullRequestTemplate);
+    }
+
+    @Override
     public Optional<HostedRepository> repository(String name) {
         Repository localRepository;
         if (NON_EXISTING_REPO.equals(name)) {
             return Optional.empty();
         }
-        if (data.repositories.containsKey(name)) {
+        if (FAKE_REPO.equals(name)) {
+            localRepository = null;
+        } else if (data.repositories.containsKey(name)) {
             localRepository = data.repositories.get(name);
         } else {
             localRepository = createLocalRepository();

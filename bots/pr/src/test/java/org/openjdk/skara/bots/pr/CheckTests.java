@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,6 +40,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.openjdk.skara.bots.common.PullRequestConstants.PROGRESS_MARKER;
 import static org.openjdk.skara.bots.common.PullRequestConstants.WEBREV_COMMENT_MARKER;
 import static org.openjdk.skara.bots.pr.CheckWorkItem.FORCE_PUSH_MARKER;
 import static org.openjdk.skara.bots.pr.CheckWorkItem.FORCE_PUSH_SUGGESTION;
@@ -48,6 +49,53 @@ import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertFirstCommentCon
 import static org.openjdk.skara.bots.pr.PullRequestAsserts.assertLastCommentContains;
 
 class CheckTests {
+    @Test
+    void initialPullRequestsAreThrottled(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo)) {
+            var author = credentials.getHostedRepository();
+            var censusBuilder = credentials.getCensusBuilder()
+                                           .addAuthor(author.forge().currentUser().id());
+            var checkBot = PullRequestBot.newBuilder()
+                                         .repo(author)
+                                         .censusRepo(censusBuilder.build())
+                                         .processCommit(false)
+                                         .build();
+
+            var pr1 = credentials.createPullRequest(author, "master", "edit1", "PR 1");
+            var pr2 = credentials.createPullRequest(author, "master", "edit2", "PR 2");
+            var pr3 = credentials.createPullRequest(author, "master", "edit3", "PR 3");
+            var pr4 = credentials.createPullRequest(author, "master", "edit4", "PR 4");
+            var pr5 = credentials.createPullRequest(author, "master", "edit5", "PR 5");
+            var pr6 = credentials.createPullRequest(author, "master", "edit6", "PR 6");
+            var closedPr = credentials.createPullRequest(author, "master", "edit7", "Closed PR");
+            closedPr.setState(Issue.State.CLOSED);
+            pr1.store().setLastUpdate(ZonedDateTime.now().minus(Duration.ofDays(6)));
+            pr2.store().setLastUpdate(ZonedDateTime.now().minus(Duration.ofDays(5)));
+            pr3.store().setLastUpdate(ZonedDateTime.now().minus(Duration.ofDays(4)));
+            pr4.store().setLastUpdate(ZonedDateTime.now().minus(Duration.ofDays(3)));
+            pr5.store().setLastUpdate(ZonedDateTime.now().minus(Duration.ofDays(2)));
+            pr6.addComment("/touch");
+
+            var items = checkBot.getPeriodicItems();
+            assertEquals(5, items.size());
+            assertEquals("PullRequestCommandWorkItem@" + author.name() + "#" + closedPr.id(), items.get(0).toString());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr6.id(), items.get(1).toString());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr5.id(), items.get(2).toString());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr4.id(), items.get(3).toString());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr3.id(), items.get(4).toString());
+
+            pr1.addComment("/touch");
+            items = checkBot.getPeriodicItems();
+            assertEquals(3, items.size());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr1.id(), items.get(0).toString());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr2.id(), items.get(1).toString());
+            assertEquals("CheckWorkItem@" + author.name() + "#" + pr1.id(), items.get(2).toString());
+
+            items = checkBot.getPeriodicItems();
+            assertEquals(0, items.size());
+        }
+    }
+
     @Test
     void simpleCommit(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
@@ -826,6 +874,57 @@ class CheckTests {
     }
 
     @Test
+    void issuePatternMismatchMessage(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                                           .addAuthor(author.forge().currentUser().id())
+                                           .addReviewer(reviewer.forge().currentUser().id());
+            var issuePRMap = new HashMap<String, List<PRRecord>>();
+            var checkBot = PullRequestBot.newBuilder()
+                                         .repo(author)
+                                         .censusRepo(censusBuilder.build())
+                                         .issueProject(issues)
+                                         .issuePRMap(issuePRMap)
+                                         .build();
+
+            var issue = issues.createIssue("My first bug", List.of("A bug"), Map.of());
+            var numericId = issue.id().split("-")[1];
+
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), Path.of("appendable.txt"),
+                                                     Set.of("issues"), null);
+            var checkConf = tempFolder.path().resolve(".jcheck/conf");
+            var defaultConf = Files.readString(checkConf);
+            var newConf = defaultConf.replace("[checks \"whitespace\"]",
+                    "[checks \"issues\"]\npattern=^([0-9]{7}): (\\S.*)$\n\n[checks \"whitespace\"]");
+            Files.writeString(checkConf, newConf);
+            localRepo.add(checkConf);
+            var masterHash = localRepo.commit("Configure issue pattern", "testauthor", "ta@none.none");
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", numericId);
+
+            TestBotRunner.runPeriodicItems(checkBot);
+
+            assertEquals(numericId + ": " + issue.title(), pr.store().title());
+            var check = pr.checks(editHash).get("jcheck");
+            assertEquals(CheckStatus.FAILURE, check.status());
+            var summary = check.summary().orElseThrow();
+            assertTrue(summary.contains("references issue `" + numericId + ": " + issue.title() + "`"));
+            assertTrue(summary.contains("does not match the issue format configured for this repository"));
+            assertTrue(summary.contains("Update the issue reference so the generated commit message matches this format"));
+            assertTrue(summary.contains("^([0-9]{7}): (\\S.*)$"));
+            assertFalse(summary.contains("does not reference any issue"));
+        }
+    }
+
+    @Test
     void issueTitleCutOff(TestInfo testInfo) throws IOException {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory()) {
@@ -863,7 +962,7 @@ class CheckTests {
 
             assertTrue(prBadTitle.store().body().contains("Title mismatch between PR and JBS for issue"));
 
-            var prCutOff =  credentials.createPullRequest(author, "master", "edit", issue1.id() + ": My first issue with a very long title that is going to be cut off by …", List.of("…the Git Forge provider", "", "It also has a second line!"), false);
+            var prCutOff =  credentials.createPullRequest(author, "master", "edit", issue1.id() + " : My first issue with a very long title that is going to be cut off by …", List.of("…the Git Forge provider", "", "It also has a second line!"), false);
 
             // Check the status
             TestBotRunner.runPeriodicItems(checkBot);
@@ -3878,6 +3977,54 @@ class CheckTests {
             TestBotRunner.runPeriodicItems(prBot);
 
             assertFalse(pr.store().body().contains("Warning"));
+        }
+    }
+
+    @Test
+    void onlyStripTrailingWhitespaceInPRBody(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var bot = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            Map<String, List<PRRecord>> issuePRMap = new HashMap<>();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(bot)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .issuePRMap(issuePRMap)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType(), Path.of("appendable.txt"), Set.of(), Set.of("reviewers", "whitespace"), "0.1");
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+            var issue1 = issues.createIssue("This is an issue", List.of("Hello"), Map.of());
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo, "An additional line\r\n");
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", issue1.id(),
+                    List.of("\t", " ", "First non-whitespace line", "\t", " ")
+            );
+
+            // Check the status
+            TestBotRunner.runPeriodicItems(prBot);
+
+            // Only trailing whitespace should have been stripped
+            var body = author.pullRequest(pr.id()).body();
+            var expectedBodyPrefix =
+                "\t\n" +
+                " \n" +
+                "First non-whitespace line\n" +
+                "\n" +
+                PROGRESS_MARKER;
+            assertTrue(body.startsWith(expectedBodyPrefix), body);
         }
     }
 }

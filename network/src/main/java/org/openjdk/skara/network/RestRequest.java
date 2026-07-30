@@ -90,6 +90,7 @@ public class RestRequest {
         private String sha256Header;
         private boolean skipLimiter = false;
         private boolean failOnEmptyResponse = false;
+        private Duration timeout = Duration.ofSeconds(30);
 
         private QueryBuilder(RequestType queryType, String endpoint) {
             this.queryType = queryType;
@@ -215,6 +216,14 @@ public class RestRequest {
 
         public QueryBuilder failOnEmptyResponse(boolean failOnEmptyResponse) {
             this.failOnEmptyResponse = failOnEmptyResponse;
+            return this;
+        }
+
+        /**
+         * Set the HTTP timeout for the request. Defaults to 30 seconds.
+         */
+        public QueryBuilder timeout(Duration timeout) {
+            this.timeout = timeout;
             return this;
         }
 
@@ -412,9 +421,17 @@ public class RestRequest {
         }
     }
 
+    private void failOnEmptyResponse(HttpResponse<String> response, QueryBuilder queryBuilder) {
+        if (queryBuilder.failOnEmptyResponse && response.body().isBlank()) {
+            throw new UncheckedRestException("Empty response body"
+                    + response.headers().firstValue("Location").map(s -> ", redirect: " + s).orElse(""),
+                    response.statusCode(), response.request());
+        }
+    }
+
     private HttpRequest.Builder createRequest(RequestType requestType, String endpoint, String body,
                                               List<QueryBuilder.Param> params, Map<String, String> headers,
-                                              boolean isJSON, String sha256Header) {
+                                              boolean isJSON, String sha256Header, Duration timeout) {
         var uriBuilder = URIBuilder.base(apiBase);
         if (endpoint != null && !endpoint.isEmpty()) {
             uriBuilder = uriBuilder.appendPath(endpoint);
@@ -433,7 +450,7 @@ public class RestRequest {
 
         var requestBuilder = HttpRequest.newBuilder()
                                         .uri(uri)
-                                        .timeout(Duration.ofSeconds(30));
+                                        .timeout(timeout);
 
         if (isJSON) {
             requestBuilder = requestBuilder.header("Content-type", "application/json");
@@ -511,13 +528,15 @@ public class RestRequest {
 
     private HttpRequest build(QueryBuilder queryBuilder) {
         var request = createRequest(queryBuilder.queryType, queryBuilder.endpoint, queryBuilder.composedBody(),
-                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header);
+                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header,
+                queryBuilder.timeout);
         return request.build();
     }
 
     private JSONValue execute(QueryBuilder queryBuilder) throws IOException {
         var request = createRequest(queryBuilder.queryType, queryBuilder.endpoint, queryBuilder.composedBody(),
-                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header);
+                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header,
+                queryBuilder.timeout);
         requestCounter.labels(queryBuilder.queryType.toString()).inc();
         var response = sendRequest(request, queryBuilder.skipLimiter);
         var errorTransform = transformBadResponse(response, queryBuilder);
@@ -526,11 +545,7 @@ public class RestRequest {
             return errorTransform.get();
         }
 
-        if (queryBuilder.failOnEmptyResponse && response.body().isBlank()) {
-            throw new UncheckedRestException("Empty response body"
-                    + response.headers().firstValue("Location").map(s -> ", redirect: " + s).orElse(""),
-                    response.statusCode(), request.build());
-        }
+        failOnEmptyResponse(response, queryBuilder);
 
         var nextRequest = nextLinkExtractor.getNextLinkRequest(response);
         if (nextRequest.isEmpty() || queryBuilder.maxPages < 2) {
@@ -553,6 +568,8 @@ public class RestRequest {
                 return errorTransform.get();
             }
 
+            failOnEmptyResponse(response, queryBuilder);
+
             nextRequest = nextLinkExtractor.getNextLinkRequest(response);
 
             parsedResponse = parseResponse(response);
@@ -563,17 +580,32 @@ public class RestRequest {
 
     private String executeUnparsed(QueryBuilder queryBuilder) throws IOException {
         var request = createRequest(queryBuilder.queryType, queryBuilder.endpoint, queryBuilder.composedBody(),
-                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header);
+                queryBuilder.params, queryBuilder.headers, queryBuilder.isJSON(), queryBuilder.sha256Header,
+                queryBuilder.timeout);
         requestCounter.labels(queryBuilder.queryType.toString()).inc();
         var response = sendRequest(request, queryBuilder.skipLimiter);
         responseCounter.labels(Integer.toString(response.statusCode()), Boolean.toString(false)).inc();
         if (response.statusCode() >= 400) {
-            var responseJSONValue = JSON.parse(response.body());
-            if (responseJSONValue.contains("message")) {
-                throw new UncheckedRestException(responseJSONValue.get("message").asString(), response.statusCode(), response.request());
-            } else {
-                throw new UncheckedRestException(response.statusCode(), response.request());
+            String errorMessage = null;
+            RuntimeException parseException = null;
+            try {
+                var responseJSONValue = JSON.parse(response.body());
+                if (responseJSONValue.contains("message")) {
+                    errorMessage = responseJSONValue.get("message").asString();
+                }
+            } catch (RuntimeException e) {
+                parseException = e;
             }
+
+            if (errorMessage != null) {
+                throw new UncheckedRestException(errorMessage, response.statusCode(), response.request());
+            }
+
+            var exception = new UncheckedRestException(response.statusCode(), response.request());
+            if (parseException != null) {
+                exception.addSuppressed(parseException);
+            }
+            throw exception;
         }
         return response.body();
     }

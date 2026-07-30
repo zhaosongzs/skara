@@ -23,10 +23,20 @@
 package org.openjdk.skara.forge;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
 
 public interface LabelConfiguration {
     Set<String> label(Set<Path> changes);
     Set<String> allowed();
     boolean isAllowed(String s);
+    Set<String> upgradeLabelsToGroups(Set<String> labels);
+    /**
+     * Returns the set of groups that this label belongs to.
+     */
+    Set<String> groupLabels(String label);
+    /**
+     * Returns the set of labels belongs to this group label
+     */
+    List<String> labelsInGroup(String label);
 }

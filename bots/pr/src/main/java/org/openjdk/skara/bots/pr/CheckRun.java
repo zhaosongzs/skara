@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,6 +46,7 @@ import java.util.regex.Matcher;
 import java.util.stream.*;
 
 import static org.openjdk.skara.bots.common.PullRequestConstants.*;
+import static org.openjdk.skara.bots.pr.LabelerWorkItem.INITIAL_LABEL_MESSAGE;
 
 class CheckRun {
     public static final String MSG_EMPTY_BODY = "The pull request body must not be empty.";
@@ -82,19 +83,21 @@ class CheckRun {
     private static final int MESSAGE_LIMIT = 50;
     private final Set<String> newLabels;
     private final boolean reviewCleanBackport;
+    private final List<String> requiredCheckedLines;
     private final Approval approval;
-    private final boolean reviewersCommandIssued;
+    private final boolean reviewersCommandIssuedByUser;
     private final ReviewCoverage reviewCoverage;
 
     private Duration expiresIn;
     // Only set if approval is configured for the repo
     private String realTargetRef;
     private boolean missingApprovalRequest = false;
+    private boolean rfrPendingOnOtherWorkItems = false;
 
     private CheckRun(CheckWorkItem workItem, PullRequest pr, Repository localRepo, List<Comment> comments,
                      List<Review> allReviews, List<Review> activeReviews, Set<String> labels,
                      CensusInstance censusInstance, boolean useStaleReviews, Set<String> integrators, boolean reviewCleanBackport,
-                     MergePullRequestReviewConfiguration reviewMerge, Approval approval) throws IOException {
+                     MergePullRequestReviewConfiguration reviewMerge, Approval approval, List<String> requiredCheckedLines) throws IOException {
         this.workItem = workItem;
         this.pr = pr;
         this.localRepo = localRepo;
@@ -108,10 +111,13 @@ class CheckRun {
         this.integrators = integrators;
         this.reviewCleanBackport = reviewCleanBackport;
         this.approval = approval;
-        this.reviewersCommandIssued = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments).isPresent();
+        this.requiredCheckedLines = requiredCheckedLines;
+        var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(pr.repository().forge().currentUser(), comments);
+        this.reviewersCommandIssuedByUser = additionalRequiredReviewers.isPresent()
+                && additionalRequiredReviewers.get().source() == ReviewersTracker.Source.USER;
 
         // If reviewers command is issued, enable reviewers check for merge pull requests
-        if (reviewersCommandIssued) {
+        if (reviewersCommandIssuedByUser) {
             reviewMerge = MergePullRequestReviewConfiguration.ALWAYS;
         }
 
@@ -129,9 +135,9 @@ class CheckRun {
     static Optional<Instant> execute(CheckWorkItem workItem, PullRequest pr, Repository localRepo, List<Comment> comments,
                                      List<Review> allReviews, List<Review> activeReviews, Set<String> labels, CensusInstance censusInstance,
                                      boolean useStaleReviews, Set<String> integrators, boolean reviewCleanBackport, MergePullRequestReviewConfiguration reviewMerge,
-                                     Approval approval) throws IOException {
+                                     Approval approval, List<String> requiredCheckedLines) throws IOException {
         var run = new CheckRun(workItem, pr, localRepo, comments, allReviews, activeReviews, labels, censusInstance,
-                useStaleReviews, integrators, reviewCleanBackport, reviewMerge, approval);
+                useStaleReviews, integrators, reviewCleanBackport, reviewMerge, approval, requiredCheckedLines);
         run.checkStatus();
         if (run.expiresIn != null) {
             return Optional.of(Instant.now().plus(run.expiresIn));
@@ -236,13 +242,52 @@ class CheckRun {
                  .collect(Collectors.toList());
     }
 
+    private static boolean containsCheckedRequiredLine(String body, String requiredLine) {
+        // Filter out lines in the body that are inside HTML block comments and
+        // also filter out lines containing HTML comments
+        var outsideBlockComments = new ArrayList<String>();
+        var isInOpenComment = false;
+        for (var line : body.lines().toList()) {
+            var closeCommentIndex = line.indexOf("-->");
+            isInOpenComment = isInOpenComment && closeCommentIndex == -1;
+
+            var outsideStartIndex = closeCommentIndex == -1 ? 0 : closeCommentIndex + "-->".length();
+            var outside = line.substring(outsideStartIndex);
+
+            var lastOpenCommentStartIndex = outside.lastIndexOf("<!--");
+            if (lastOpenCommentStartIndex != -1) {
+                if (outside.indexOf("-->", lastOpenCommentStartIndex) == -1) {
+                    isInOpenComment = true;
+                }
+            }
+
+            if (!isInOpenComment && closeCommentIndex == -1 && lastOpenCommentStartIndex == -1) {
+                outsideBlockComments.add(line);
+            }
+        }
+
+        // Check that the required line is present and checked
+        var dashLowercaseCheched = "- [x] " + requiredLine;
+        var dashUppercaseCheched = "- [X] " + requiredLine;
+        return outsideBlockComments.stream()
+            .map(String::stripTrailing)
+            .filter(l -> l.equals(dashLowercaseCheched) || l.equals(dashUppercaseCheched))
+            .count() > 0;
+    }
+
     // Additional bot-specific checks that are not handled by JCheck
-    private List<String> botSpecificChecks(boolean iscleanBackport) {
+    private List<String> botSpecificChecks(boolean isCleanBackport) {
         var ret = new ArrayList<String>();
 
         var bodyWithoutStatus = bodyWithoutStatus();
-        if ((bodyWithoutStatus.isBlank() || bodyWithoutStatus.equals(EMPTY_PR_BODY_MARKER)) && !iscleanBackport) {
+        if ((bodyWithoutStatus.isBlank() || bodyWithoutStatus.equals(EMPTY_PR_BODY_MARKER)) && !isCleanBackport) {
             ret.add(MSG_EMPTY_BODY);
+        }
+
+        for (var line : requiredCheckedLines) {
+            if (!containsCheckedRequiredLine(bodyWithoutStatus, line)) {
+                ret.add("Pull request body is missing required line: `- [x] " + line + "`");
+            }
         }
 
         if (!isTargetBranchAllowed()) {
@@ -262,6 +307,22 @@ class CheckRun {
         if (!integrators.isEmpty() && PullRequestUtils.isMerge(pr) && !integrators.contains(pr.author().username())) {
             var error = "Only the designated integrators for this repository are allowed to create merge-style pull requests.";
             ret.add(error);
+        }
+
+        // If the bot has label configuration
+        if (!workItem.bot.labelConfiguration().allowed().isEmpty()) {
+            // If the pr is already auto labelled, check if the pull request is associated with at least one component
+            if (findComment(INITIAL_LABEL_MESSAGE).isPresent()) {
+                var existingAllowed = new HashSet<>(pr.labelNames());
+                existingAllowed.retainAll(workItem.bot.labelConfiguration().allowed());
+                if (existingAllowed.isEmpty()) {
+                    ret.add("This pull request must be associated with at least one component. " +
+                            "Please use the [/label](https://wiki.openjdk.org/display/SKARA/Pull+Request+Commands#PullRequestCommands-/label)" +
+                            " pull request command.");
+                }
+            } else {
+                rfrPendingOnOtherWorkItems = true;
+            }
         }
 
         return ret;
@@ -457,13 +518,20 @@ class CheckRun {
         }
 
         // Check if the visitor found any issues that should be resolved before reviewing
-        if (visitor.isReadyForReview()) {
-            newLabels.add("rfr");
-            return true;
-        } else {
+        if (!visitor.isReadyForReview()) {
             newLabels.remove("rfr");
             return false;
         }
+
+        // If rfr is still pending on other workItems, so don't actively mark this pr as rfr, wait for another round of CheckWorkItem
+        if (rfrPendingOnOtherWorkItems) {
+            log.info("rfr is pending on other workItems for pr: " + pr.id());
+            return newLabels.contains("rfr");
+        }
+
+        // No issues found, add rfr label now
+        newLabels.add("rfr");
+        return true;
     }
 
     private boolean updateClean(Commit commit) {
@@ -599,7 +667,7 @@ class CheckRun {
         var checks = reviewNeeded ? visitor.getChecks() : visitor.getReadyForReviewChecks();
         checks.putAll(additionalProgresses);
         return checks.entrySet().stream()
-                .map(entry -> "- [" + (entry.getValue() ? "x" : " ") + "] " + entry.getKey())
+                .map(entry -> "- \\[" + (entry.getValue() ? "x" : " ") + "\\] " + entry.getKey())
                 .collect(Collectors.joining("\n"));
     }
 
@@ -969,7 +1037,7 @@ class CheckRun {
         var markerIndex = description.lastIndexOf(PROGRESS_MARKER);
         return (markerIndex < 0 ?
                 description :
-                description.substring(0, markerIndex)).trim();
+                description.substring(0, markerIndex)).stripTrailing();
     }
 
     private String updateStatusMessage(String message) {
@@ -1001,11 +1069,15 @@ class CheckRun {
     }
 
     private Optional<Comment> findComment(String marker) {
+        return findComment(comments, marker, pr);
+    }
+
+    static Optional<Comment> findComment(List<Comment> comments, String marker, PullRequest pr) {
         var self = pr.repository().forge().currentUser();
         return comments.stream()
-                       .filter(comment -> comment.author().equals(self))
-                       .filter(comment -> comment.body().contains(marker))
-                       .findAny();
+                .filter(comment -> comment.author().equals(self))
+                .filter(comment -> comment.body().contains(marker))
+                .findAny();
     }
 
     private String getMergeReadyComment(String commitMessage) {
@@ -1027,14 +1099,6 @@ class CheckRun {
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
-        }
-
-        if (labels.stream().anyMatch(label -> workItem.bot.twoReviewersLabels().contains(label))) {
-            message.append("\n\n");
-            message.append(":mag: One or more changes in this pull request modifies files in areas of ");
-            message.append("the source code that often require two reviewers. Please consider if this is ");
-            message.append("the case for this pull request, and if so, await a second reviewer to approve ");
-            message.append("this pull request before you integrate it.");
         }
 
         if (labels.stream().anyMatch(label -> workItem.bot.twentyFourHoursLabels().contains(label))) {
@@ -1465,7 +1529,7 @@ class CheckRun {
             integrationBlockers.addAll(mergeJCheckMessageWithTargetConf);
             integrationBlockers.addAll(mergeJCheckMessageWithCommitConf);
 
-            var reviewNeeded = !isCleanBackport || reviewCleanBackport || reviewersCommandIssued;
+            var reviewNeeded = !isCleanBackport || reviewCleanBackport || reviewersCommandIssuedByUser;
 
             // Calculate and update the status message if needed
             var statusMessage = getStatusMessage(visitor, additionalErrors, additionalProgresses, integrationBlockers, warnings,
@@ -1551,22 +1615,26 @@ class CheckRun {
         pr.updateCheck(check);
 
         // Synchronize the wanted set of labels
-        for (var newLabel : newLabels) {
-            if (!labels.contains(newLabel)) {
-                log.info("Adding label " + newLabel);
-                pr.addLabel(newLabel);
-            }
-        }
-        for (var oldLabel : labels) {
-            if (!newLabels.contains(oldLabel)) {
-                log.info("Removing label " + oldLabel);
-                pr.removeLabel(oldLabel);
-            }
-        }
+        syncLabels(pr, labels, newLabels, log);
 
         // After updating the PR, rethrow any exception to automatically retry on transient errors
         if (checkException != null) {
             throw new RuntimeException("Exception during jcheck", checkException);
+        }
+    }
+
+    static void syncLabels(PullRequest pr, Set<String> oldLabels, Set<String> newLabels, Logger log) {
+        for (var newLabel : newLabels) {
+            if (!oldLabels.contains(newLabel)) {
+                log.info("Adding label " + newLabel);
+                pr.addLabel(newLabel);
+            }
+        }
+        for (var oldLabel : oldLabels) {
+            if (!newLabels.contains(oldLabel)) {
+                log.info("Removing label " + oldLabel);
+                pr.removeLabel(oldLabel);
+            }
         }
     }
 

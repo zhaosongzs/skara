@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,10 @@ public class HostCredentials implements AutoCloseable {
     private int nextHostIndex;
 
     private final Logger log = Logger.getLogger("org.openjdk.skara.test");
+
+    static {
+        HttpProxy.setup();
+    }
 
     private interface Credentials {
         Forge createRepositoryHost(int userIndex);
@@ -190,10 +194,19 @@ public class HostCredentials implements AutoCloseable {
                 HostUser.create(4, "user4", "User Number 4"),
                 HostUser.create(5, "user5", "User Number 5")
         );
+        private final JSONObject hostConf;
+
+        private TestCredentials() {
+            this(null);
+        }
+
+        private TestCredentials(JSONObject hostConf) {
+            this.hostConf = hostConf;
+        }
 
         private TestHost createHost(int userIndex) {
             if (userIndex == 0) {
-                hosts.add(TestHost.createNew(users));
+                hosts.add(TestHost.createNew(users, hostConf));
             } else {
                 hosts.add(TestHost.createFromExisting(hosts.get(0), userIndex));
             }
@@ -261,14 +274,16 @@ public class HostCredentials implements AutoCloseable {
     }
 
     public HostCredentials(TestInfo testInfo) throws IOException  {
-        HttpProxy.setup();
+        this(testInfo, null);
+    }
 
+    public HostCredentials(TestInfo testInfo, JSONObject testHostConf) throws IOException  {
         var credentialsFile = System.getProperty("credentials");
         testName = testInfo.getDisplayName();
 
         // If no credentials have been specified, use the test host implementation
         if (credentialsFile == null) {
-            credentials = new TestCredentials();
+            credentials = new TestCredentials(testHostConf);
         } else {
             var credentialsPath = Paths.get(credentialsFile);
             var credentialsData = Files.readAllBytes(credentialsPath);
@@ -342,22 +357,24 @@ public class HostCredentials implements AutoCloseable {
      */
     public HostedRepository getHostedRepository(String name) throws IOException {
         var host = getRepositoryHost();
-        var repo = credentials.getHostedRepository(host, name);
+        var repo = (TestHostedRepository) credentials.getHostedRepository(host, name);
 
-        var retryCount = 0;
-        while (credentialsLock == null) {
-            try {
-                if (getLock(repo)) {
-                    credentialsLock = repo;
-                }
-            } catch (IOException e) {
-                if (retryCount > 3) {
-                    throw e;
-                }
+        if (repo.localRepository() != null) {
+            var retryCount = 0;
+            while (credentialsLock == null) {
                 try {
-                    Thread.sleep(Duration.ofSeconds(1));
-                    retryCount++;
-                } catch (InterruptedException ignored) {
+                    if (getLock(repo)) {
+                        credentialsLock = repo;
+                    }
+                } catch (IOException e) {
+                    if (retryCount > 3) {
+                        throw e;
+                    }
+                    try {
+                        Thread.sleep(Duration.ofSeconds(1));
+                        retryCount++;
+                    } catch (InterruptedException ignored) {
+                    }
                 }
             }
         }

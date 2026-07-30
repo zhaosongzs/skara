@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -188,12 +188,21 @@ public class PullRequestCommandWorkItem extends PullRequestWorkItem {
         if (nextCommand.isEmpty()) {
             log.info("No new non-external PR commands found, stopping further processing");
 
-            if (!bot.isAutoLabelled(pr)) {
-                // When all commands are processed, it's time to check labels
-                return List.of(new LabelerWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
-            } else {
+            // If there is no label configuration, don't generate LabelerWorkItem
+            if (bot.labelConfiguration().allowed().isEmpty()) {
                 return List.of();
             }
+
+            if (!pr.isClosed()) {
+                // Check if the headHash of the pr has already been processed
+                var autoLabeledHashOpt = LabelerWorkItem.autoLabeledHash(prComments(), pr);
+                if (autoLabeledHashOpt.isPresent() && autoLabeledHashOpt.get().equals(pr.headHash().hex())) {
+                    return List.of();
+                }
+                return List.of(new LabelerWorkItem(bot, prId, errorHandler, triggerUpdatedAt));
+            }
+
+            return List.of();
         }
 
         var seedPath = bot.seedStorage().orElse(scratchArea.getSeeds());

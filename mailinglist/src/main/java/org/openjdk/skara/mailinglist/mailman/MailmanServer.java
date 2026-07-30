@@ -24,32 +24,24 @@ package org.openjdk.skara.mailinglist.mailman;
 
 import org.openjdk.skara.email.*;
 import org.openjdk.skara.mailinglist.*;
-import org.openjdk.skara.network.URIBuilder;
 
 import java.io.*;
 import java.net.URI;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
 
-public class MailmanServer implements MailingListServer {
-    private final URI archive;
-    private final String smtpServer;
+public abstract class MailmanServer implements MailingListServer {
+    protected final URI archive;
+    private final EmailSender sender;
     private final Duration sendInterval;
-    private final boolean useEtag;
+    protected final boolean useEtag;
     private volatile Instant lastSend;
 
-    public MailmanServer(URI archive, String smtpServer, Duration sendInterval, boolean useEtag) {
+    protected MailmanServer(URI archive, EmailSender sender, Duration sendInterval, boolean useEtag) {
         this.archive = archive;
-        this.smtpServer = smtpServer;
+        this.sender = sender;
         this.sendInterval = sendInterval;
         this.useEtag = useEtag;
         lastSend = Instant.EPOCH;
-    }
-
-    URI getMbox(String listName, ZonedDateTime month) {
-        var dateStr = DateTimeFormatter.ofPattern("yyyy-MMMM", Locale.US).format(month);
-        return URIBuilder.base(archive).appendPath(listName + "/" + dateStr + ".txt").build();
     }
 
     void sendMessage(Email message) {
@@ -61,7 +53,7 @@ public class MailmanServer implements MailingListServer {
         }
         lastSend = Instant.now();
         try {
-            SMTP.send(smtpServer, message);
+            sender.send(message);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -72,8 +64,7 @@ public class MailmanServer implements MailingListServer {
         sendMessage(email);
     }
 
-    @Override
-    public MailingListReader getListReader(String... listNames) {
-        return new MailmanListReader(this, Arrays.asList(listNames), useEtag);
+    public URI archive() {
+        return archive;
     }
 }

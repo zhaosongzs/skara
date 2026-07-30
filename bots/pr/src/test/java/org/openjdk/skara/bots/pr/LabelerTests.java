@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,12 +23,14 @@
 package org.openjdk.skara.bots.pr;
 
 import org.openjdk.skara.forge.*;
+import org.openjdk.skara.jcheck.ReviewersCheck;
 import org.openjdk.skara.test.*;
 
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -67,9 +69,9 @@ class LabelerTests {
             localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
             var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
 
-            // Check the status - only the rfr label should be set
+            // Check the status - rfr label should not be set since the pr is not associated with any component
             TestBotRunner.runPeriodicItems(labelBot);
-            assertEquals(Set.of("rfr"), new HashSet<>(pr.labelNames()));
+            assertEquals(Set.of(), new HashSet<>(pr.store().labelNames()));
             assertLastCommentContains(pr, "However, no automatic labelling rule matches the changes in this pull request.");
             assertLastCommentContains(pr, "<details>");
             assertLastCommentContains(pr, "<summary>Applicable Labels</summary>");
@@ -119,7 +121,7 @@ class LabelerTests {
 
             // Check the status - there should now be a test1 label
             TestBotRunner.runPeriodicItems(labelBot);
-            assertEquals(Set.of("rfr", "test1"), new HashSet<>(pr.labelNames()));
+            assertEquals(Set.of("rfr", "test1"), new HashSet<>(pr.store().labelNames()));
         }
     }
 
@@ -170,7 +172,7 @@ class LabelerTests {
 
             // Check the status - there should now be a test1 label
             TestBotRunner.runPeriodicItems(labelBot);
-            assertEquals(Set.of("rfr", "test1"), new HashSet<>(pr.labelNames()));
+            assertEquals(Set.of("rfr", "test1"), new HashSet<>(pr.store().labelNames()));
         }
     }
 
@@ -212,13 +214,13 @@ class LabelerTests {
 
             var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
 
-            // Issue a manual label command
+            // Issue a manual label command, this shouldn't affect the auto labeling
             var reviewerPr = reviewer.pullRequest(pr.id());
             reviewerPr.addComment("/label add test2");
 
-            // Check the status - there should still only be a test2 label
+            // Check the status - there should be test1 and test2
             TestBotRunner.runPeriodicItems(labelBot);
-            assertEquals(Set.of("rfr", "test2"), new HashSet<>(pr.labelNames()));
+            assertEquals(Set.of("rfr", "test2", "test1"), new HashSet<>(pr.store().labelNames()));
         }
     }
 
@@ -260,12 +262,12 @@ class LabelerTests {
 
             var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
 
-            // Manually set a label
+            // Manually set a label shouldn't affect auto labeling
             pr.addLabel("test2");
 
-            // Check the status - there should still only be a test2 label
+            // Check the status - there should be test1 and test2
             TestBotRunner.runPeriodicItems(labelBot);
-            assertEquals(Set.of("rfr", "test2"), new HashSet<>(pr.labelNames()));
+            assertEquals(Set.of("rfr", "test2", "test1"), new HashSet<>(pr.store().labelNames()));
         }
     }
 
@@ -312,7 +314,454 @@ class LabelerTests {
 
             // Check the status - the test1 label should have been added
             TestBotRunner.runPeriodicItems(labelBot);
-            assertEquals(Set.of("rfr", "test1", "test42"), new HashSet<>(pr.labelNames()));
+            assertEquals(Set.of("rfr", "test1", "test42"), new HashSet<>(pr.store().labelNames()));
+        }
+    }
+
+    @Test
+    void autoAdjustLabel(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("1", List.of(Pattern.compile("cpp$")))
+                    .addMatchers("2", List.of(Pattern.compile("hpp$")))
+                    .addMatchers("3", List.of(Pattern.compile("txt$")))
+                    .addGroup("group1", List.of("1", "2"))
+                    .addExtra("extra")
+                    .build();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType(), Path.of("test.hpp"));
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
+
+            // The bot should have applied one label automatically
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("2", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertLastCommentContains(pr, "The following label will be automatically applied");
+            assertLastCommentContains(pr, "`2`");
+
+            // Add cpp and hpp together should add group label
+            var test1Cpp = localRepo.root().resolve("test1.cpp");
+            try (var output = Files.newBufferedWriter(test1Cpp)) {
+                output.append("test");
+            }
+            localRepo.add(test1Cpp);
+            var test1Hpp = localRepo.root().resolve("test1.hpp");
+            try (var output = Files.newBufferedWriter(test1Hpp)) {
+                output.append("test");
+            }
+            localRepo.add(test1Hpp);
+            var addHash = localRepo.commit("add cpp,hpp file", "duke", "duke@openjdk.org");
+            localRepo.push(addHash, author.authenticatedUrl(), "edit", true);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("group1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            // Add another Cpp file, since "group1" label is already added, the bot shouldn't add "1" label
+            var test2Cpp = localRepo.root().resolve("test2.cpp");
+            try (var output = Files.newBufferedWriter(test2Cpp)) {
+                output.append("test");
+            }
+            localRepo.add(test2Cpp);
+            addHash = localRepo.commit("add cpp2 file", "duke", "duke@openjdk.org");
+            localRepo.push(addHash, author.authenticatedUrl(), "edit", true);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("group1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            // But user should still be able to add "1" label manually
+            pr.addComment("/label 1");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("group1", "1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            // Simulate force-push.
+            localRepo.checkout(editHash);
+            var test1txt = localRepo.root().resolve("test1.txt");
+            try (var output = Files.newBufferedWriter(test1txt)) {
+                output.append("test");
+            }
+            localRepo.add(test1txt);
+            var forcePushHash = localRepo.commit("add txt file", "duke", "duke@openjdk.org");
+            localRepo.push(forcePushHash, author.authenticatedUrl(), "edit", true);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("group1", "1", "2", "rfr", "3"), new HashSet<>(pr.store().labelNames()));
+        }
+    }
+
+    @Test
+    void autoAdjustLabelWithMerge(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addCommitter(author.forge().currentUser().id());
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("1", List.of(Pattern.compile("cpp$")))
+                    .addMatchers("2", List.of(Pattern.compile("hpp$")))
+                    .addMatchers("3", List.of(Pattern.compile("txt$")))
+                    .addGroup("group1", List.of("1", "2"))
+                    .addExtra("extra")
+                    .build();
+            var prBot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path().resolve("localrepo");
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType(), Path.of("test.hpp"));
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
+
+            // The bot should have applied one label automatically
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("2", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertLastCommentContains(pr, "The following label will be automatically applied");
+            assertLastCommentContains(pr, "`2`");
+
+            // Update the target branch
+            localRepo.checkout(masterHash);
+            var txtFile = localRepo.root().resolve("unrelated.txt");
+            Files.writeString(txtFile, "Hello");
+            localRepo.add(txtFile);
+            var updatedMasterHash = localRepo.commit("add txt file", "duke", "duke@openjdk.org");
+            localRepo.push(updatedMasterHash, author.authenticatedUrl(), "master", true);
+
+            TestBotRunner.runPeriodicItems(prBot);
+            // Change to master branch shouldn't change labels
+            assertEquals(Set.of("2", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            // Merge master into edit
+            localRepo.checkout(editHash);
+            localRepo.merge(updatedMasterHash);
+            var mergeHash = localRepo.commit("merge master", "duke", "duke@openjdk.org");
+            localRepo.push(mergeHash, author.authenticatedUrl(), "edit", true);
+            // Add cpp file
+            localRepo.checkout(mergeHash);
+            var cppFile = localRepo.root().resolve("test.cpp");
+            Files.writeString(cppFile, "Hello cpp");
+            localRepo.add(cppFile);
+            var updatedEditHash = localRepo.commit("add cpp file", "duke", "duke@openjdk.org");
+            localRepo.push(updatedEditHash, author.authenticatedUrl(), "edit", true);
+
+            TestBotRunner.runPeriodicItems(prBot);
+            // The commit brought in by merge shouldn't affect labels, so "3" shouldn't be added
+            // After adding cpp file, "1" should be added, but "2" label already there, so "1" will be upgraded to "group1"
+            assertEquals(Set.of("group1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            // Remove group1 manually
+            pr.addComment("/label remove group1");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("2", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            //Add another file trigger label "1"
+            var cpp2File = localRepo.root().resolve("test2.cpp");
+            Files.writeString(cpp2File, "Hello cpp");
+            localRepo.add(cpp2File);
+            var updated2EditHash = localRepo.commit("add test2.cpp file", "duke", "duke@openjdk.org");
+            localRepo.push(updated2EditHash, author.authenticatedUrl(), "edit", true);
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
+        }
+    }
+
+    @Test
+    void autoLabelAppliesTwoReviewersRule(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer1 = credentials.getHostedRepository();
+            var reviewer2 = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer1.forge().currentUser().id())
+                    .addReviewer(reviewer2.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR matching the automatic "hotspot" label
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            // Automatic labeling should apply hotspot and require two reviewers
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertTrue(pr.store().labelNames().contains("hotspot"));
+            assertTrue(pr.store().labelNames().contains("rfr"));
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertLastCommentContains(pr, "This can be overridden with the `/reviewers` command.");
+
+            var reviewer1Pr = reviewer1.pullRequest(pr.id());
+            reviewer1Pr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(labelBot);
+
+            assertFalse(pr.store().labelNames().contains("ready"));
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 1 [Reviewer](https://openjdk.org/bylaws#reviewer), " +
+                    "1 [Author](https://openjdk.org/bylaws#author)"));
+
+            pr.removeLabel("hotspot");
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertTrue(pr.store().body().contains("2 reviews required, with at least 1 [Reviewer](https://openjdk.org/bylaws#reviewer), " +
+                    "1 [Author](https://openjdk.org/bylaws#author)"));
+        }
+    }
+
+    @Test
+    void twoReviewersRuleClearedForBackportPR(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory(false)) {
+
+            var author = credentials.getHostedRepository();
+            var integrator = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+            var issues = credentials.getIssueProject();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addCommitter(author.forge().currentUser().id())
+                    .addReviewer(integrator.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var bot = PullRequestBot.newBuilder()
+                    .repo(integrator)
+                    .censusRepo(censusBuilder.build())
+                    .issueProject(issues)
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .issuePRMap(new HashMap<>())
+                    .reviewCleanBackport(true)
+                    .build();
+
+            // Populate the projects repository
+            var localRepo = CheckableRepository.init(tempFolder.path(), author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var releaseBranch = localRepo.branch(masterHash, "release");
+            localRepo.checkout(releaseBranch);
+            var newFile = localRepo.root().resolve("hotspot.txt");
+            Files.writeString(newFile, "hello");
+            localRepo.add(newFile);
+            var issue1 = credentials.createIssue(issues, "An issue");
+            var issue1Number = issue1.id().split("-")[1];
+            var originalMessage = issue1Number + ": An issue\n" +
+                    "\n" +
+                    "Reviewed-by: integrationreviewer2";
+            var releaseHash = localRepo.commit(originalMessage, "integrationcommitter1", "integrationcommitter1@openjdk.org");
+            localRepo.push(releaseHash, author.authenticatedUrl(), "refs/heads/release", true);
+
+            // "backport" the new file to the master branch
+            localRepo.checkout(localRepo.defaultBranch());
+            var editBranch = localRepo.branch(masterHash, "edit");
+            localRepo.checkout(editBranch);
+            var newFile2 = localRepo.root().resolve("hotspot.txt");
+            Files.writeString(newFile2, "hello");
+            localRepo.add(newFile2);
+            var editHash = localRepo.commit("Backport", "duke", "duke@openjdk.org");
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var pr = credentials.createPullRequest(author, "master", "edit", "Wrong title", List.of("body"));
+
+            TestBotRunner.runPeriodicItems(bot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertTrue(pr.store().body().contains("2 reviews required"));
+
+            // Correct the title
+            pr.setTitle("Backport " + releaseHash.hex());
+            TestBotRunner.runPeriodicItems(bot);
+            var comments = pr.comments();
+            // Two reviewers requirement should be cleared
+            var twoReviewersClearedComment = comments.get(3).body();
+            assertTrue(twoReviewersClearedComment.contains("This is now a backport PR, the extra reviewers requirement has been cleared."));
+            assertTrue(pr.store().body().contains("1 review required"));
+            // The bot should reply with a backport message
+            var backportComment = comments.get(4).body();
+            assertTrue(backportComment.contains("This backport pull request has now been updated with issue"));
+            assertTrue(backportComment.contains("<!-- backport " + releaseHash.hex() + " -->"));
+            assertEquals(issue1Number + ": An issue", pr.store().title());
+            assertTrue(pr.store().labelNames().contains("backport"));
+            assertTrue(pr.store().labelNames().contains("clean"));
+        }
+    }
+
+    @Test
+    void twoReviewersRuleClearedForMergeStylePR(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .reviewMerge(MergePullRequestReviewConfiguration.ALWAYS)
+                    .build();
+
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+            var otherHash1 = CheckableRepository.appendAndCommit(localRepo, "First change in other",
+                    "First other\n\nReviewed-by: integrationreviewer2");
+            localRepo.push(otherHash1, author.authenticatedUrl(), "other", true);
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertTrue(pr.store().body().contains("2 reviews required"));
+
+            // Convert to Merge Style PR
+            pr.setTitle("Merge " + author.name() + ":other");
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "This is now a merge PR, the extra reviewers requirement has been cleared.");
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            // Convert back to normal PR
+            pr.setTitle("123: Not a merge PR");
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR has been set to 2 based on the presence of this label: `hotspot`.");
+            assertTrue(pr.store().body().contains("2 reviews required"));
+
+            // Convert to Merge Style PR again
+            pr.setTitle("Merge " + author.name() + ":other");
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "This is now a merge PR, the extra reviewers requirement has been cleared.");
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            // Issue a reviewers comment
+            var reviewPR = reviewer.pullRequest(pr.id());
+            reviewPR.addComment("/reviewers 4");
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertLastCommentContains(pr, "The total number of required reviews for this PR (including the jcheck configuration and the last /reviewers command) is now set to 4");
+            assertTrue(pr.store().body().contains("4 reviews required"));
+
+            //Convert back to normal PR
+            pr.setTitle("123: Not a merge PR");
+            TestBotRunner.runPeriodicItems(labelBot);
+            // Shouldn't have the two reviewers comment posted
+            assertLastCommentContains(pr, "The total number of required reviews for this PR (including the jcheck configuration and the last /reviewers command) is now set to 4");
+            assertTrue(pr.store().body().contains("4 reviews required"));
+        }
+    }
+
+    @Test
+    void explicitReviewersCommandWinsOverTwoReviewersLabel(TestInfo testInfo) throws IOException {
+        try (var credentials = new HostCredentials(testInfo);
+             var tempFolder = new TemporaryDirectory()) {
+            var author = credentials.getHostedRepository();
+            var reviewer1 = credentials.getHostedRepository();
+            var reviewer2 = credentials.getHostedRepository();
+
+            var labelConfiguration = LabelConfigurationJson.builder()
+                    .addMatchers("hotspot", List.of(Pattern.compile("hotspot.txt")))
+                    .build();
+            var censusBuilder = credentials.getCensusBuilder()
+                    .addAuthor(author.forge().currentUser().id())
+                    .addReviewer(reviewer1.forge().currentUser().id())
+                    .addReviewer(reviewer2.forge().currentUser().id());
+            var labelBot = PullRequestBot.newBuilder()
+                    .repo(author)
+                    .censusRepo(censusBuilder.build())
+                    .labelConfiguration(labelConfiguration)
+                    .twoReviewersLabels(Set.of("hotspot"))
+                    .build();
+
+            // Populate the projects repository
+            var localRepoFolder = tempFolder.path();
+            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
+            var masterHash = localRepo.resolve("master").orElseThrow();
+            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
+
+            // Make a change with a corresponding PR matching the automatic "hotspot" label
+            var editHash = CheckableRepository.appendAndCommit(localRepo);
+            localRepo.push(editHash, author.authenticatedUrl(), "refs/heads/edit", true);
+            var hotspotFile = localRepoFolder.resolve("hotspot.txt");
+            Files.writeString(hotspotFile, "hotspot");
+            localRepo.add(hotspotFile);
+            var hotspotHash = localRepo.commit("touch hotspot area", "test", "test@test");
+            localRepo.push(hotspotHash, author.authenticatedUrl(), "edit");
+
+            var pr = credentials.createPullRequest(author, "master", "edit", "This is a pull request");
+
+            // Explicit command immediately after PR creation should win
+            var reviewer1Pr = reviewer1.pullRequest(pr.id());
+            reviewer1Pr.addComment("/reviewers 1 reviewer");
+
+            TestBotRunner.runPeriodicItems(labelBot);
+            // First round handles command/labeler ordering; second round verifies resulting policy state
+            TestBotRunner.runPeriodicItems(labelBot);
+            assertTrue(pr.store().labelNames().contains("hotspot"));
+            assertTrue(pr.store().body().contains("1 review required"));
+
+            reviewer1Pr.addReview(Review.Verdict.APPROVED, "Approved");
+            TestBotRunner.runPeriodicItems(labelBot);
+
+            assertTrue(pr.store().labelNames().contains("ready"));
         }
     }
 }

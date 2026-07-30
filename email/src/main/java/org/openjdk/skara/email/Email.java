@@ -22,10 +22,13 @@
  */
 package org.openjdk.skara.email;
 
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.time.ZonedDateTime;
 import java.time.format.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -42,7 +45,10 @@ public class Email {
     private final static Pattern mboxMessageHeaderBodyPattern = Pattern.compile(
             "(\\r\\n){2}|(\\n){2}", Pattern.MULTILINE);
     private final static Pattern mboxMessageHeaderPattern = Pattern.compile(
-            "^([-\\w]+): ((?:.(?!\\R\\w))*.)", Pattern.MULTILINE | Pattern.DOTALL);
+            "^([-\\w]+):\\R? ((?:.(?!\\R\\w))*.)", Pattern.MULTILINE | Pattern.DOTALL);
+    private final static Pattern mimeHeadersPattern = Pattern.compile(
+            "^(Content-Type|Content-Transfer-Encoding): .*");
+    private final static Pattern charsetPattern = Pattern.compile("charset=\"([a-zA-Z0-9-]+)\"");
 
     Email(EmailAddress id, ZonedDateTime date, List<EmailAddress> recipients, EmailAddress author, EmailAddress sender, String subject, String body, Map<String, String> headers) {
         this.id = id;
@@ -71,8 +77,101 @@ public class Email {
                                                                                       .replaceAll("\\R", "")));
         ret.headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         ret.headers.putAll(headers);
-        ret.body = parts[1].stripTrailing();
+
+        var boundary = extractContentBoundary(ret.headers);
+        if (boundary != null) {
+            var body = new StringBuilder();
+            var bodySections = parts[1].split("\\R?--" + boundary + "(?:--)?\\R");
+            for (String bodySection : bodySections) {
+                if (bodySection.lines().findFirst().map(e -> mimeHeadersPattern.matcher(e).matches()).orElse(false)) {
+                    var mimeHeaders = bodySection.lines()
+                            .takeWhile(s -> !s.isEmpty())
+                            .map(mboxMessageHeaderPattern::matcher)
+                            .filter(Matcher::matches)
+                            .collect(Collectors.toMap(match -> match.group(1), match -> match.group(2)));
+                    // Skip any non plain text part
+                    if (mimeHeaders.containsKey("Content-Type") && !mimeHeaders.get("Content-Type").startsWith("text/plain")) {
+                        continue;
+                    }
+                    // Remove the mime headers from the rest of the body section
+                    var bodySectionBody = bodySection.split("\\R{2}", 2)[1];
+                    // Mailman3 encodes mail bodies with "quoted-printable".
+                    if ("quoted-printable".equals(mimeHeaders.get("Content-Transfer-Encoding"))) {
+                        Matcher encodingMatcher = charsetPattern.matcher(mimeHeaders.get("Content-Type"));
+                        String charsetName;
+                        if (encodingMatcher.find()) {
+                            charsetName = encodingMatcher.group(1);
+                        } else {
+                            charsetName = "utf-8";
+                        }
+                        bodySectionBody = decodeQuotedPrintable(bodySectionBody, charsetName);
+                    }
+                    body.append(bodySectionBody.stripTrailing());
+                } else {
+                    body.append(bodySection.stripTrailing());
+                }
+            }
+            ret.body = body.toString();
+        } else {
+            ret.body = parts[1].stripTrailing();
+        }
         return ret;
+    }
+
+    /**
+     * Decode quoted printable encoding text. Non ASCII characters are encoded
+     * as series of `=XX` where `XX` is the hex value of a byte. Newlines in
+     * the encoding are escaped with `=`.
+     * @param s The string to be decoded.
+     * @param charsetName The charset name to use when converting bytes to a
+     *                    back to a String.
+     * @return A String with the decoded contents.
+     */
+    private static String decodeQuotedPrintable(String s, String charsetName) {
+        byte[] in = s.getBytes(StandardCharsets.US_ASCII);
+        // The decoded buffer can never be longer than the encoded buffer as
+        // every decoding step reduces bytes.
+        byte[] out = new byte[in.length];
+        int j = 0;
+        for (int i = 0; i < in.length; i++) {
+            if (in[i] == '=') {
+                i++;
+                switch (in[i]) {
+                    case '\n' : break;
+                    case '\r' : {
+                        if (in[i + 1] == '\n') {
+                            i++;
+                        }
+                        break;
+                    }
+                    default : {
+                        out[j++] = (byte) Integer.parseInt("" + (char) in[i++] + (char) in[i], 16);
+                        break;
+                    }
+                }
+            } else {
+                out[j++] = in[i];
+            }
+        }
+        try {
+            return new String(out, 0, j, charsetName);
+        } catch (UnsupportedEncodingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private final static Pattern mboxBoundaryPattern = Pattern.compile(".*boundary=\"([^\"]*)\".*");
+
+    // Content-Type: multipart/mixed; boundary="===============3685582790409215631=="
+    private static String extractContentBoundary(Map<String, String> headers) {
+        if (headers.containsKey("Content-Type")) {
+            var contentType = headers.get("Content-Type");
+            var matcher = mboxBoundaryPattern.matcher(contentType);
+            if (matcher.matches()) {
+                return matcher.group(1);
+            }
+        }
+        return null;
     }
 
     private static final Pattern redundantTimeZonePattern = Pattern.compile("^(.*[-+\\d{4}]) \\(\\w+\\)$");

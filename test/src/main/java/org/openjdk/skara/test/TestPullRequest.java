@@ -51,7 +51,6 @@ public class TestPullRequest extends TestIssue implements PullRequest {
     protected final String sourceRef;
     protected final String targetRef;
     protected final boolean draft;
-    private List<Label> labels;
 
     public TestPullRequest(TestPullRequestStore store, TestHostedRepository targetRepository) {
         super(store, targetRepository.forge().currentUser());
@@ -317,19 +316,6 @@ public class TestPullRequest extends TestIssue implements PullRequest {
     }
 
     /**
-     * Mimic GitHub/GitLab where the labels are fetched lazily and cached.
-     * In GitLabMergeRequest, the labels are actually part of the main json, but
-     * are still re-fetched once on the first call to labels().
-     */
-    @Override
-    public List<Label> labels() {
-        if (labels == null) {
-            labels = store().labels().keySet().stream().map(Label::new).collect(Collectors.toList());
-        }
-        return labels;
-    }
-
-    /**
      * Equals for a TestPullRequest means that all the snapshotted data is the same.
      */
     @Override
@@ -357,5 +343,11 @@ public class TestPullRequest extends TestIssue implements PullRequest {
 
     public void setReturnCompleteDiff(boolean complete){
         this.store().setReturnCompleteDiff(complete);
+    }
+
+    // For TestPullRequest, we control the lastUpdate timestamp, so it won't be spurious
+    @Override
+    public ZonedDateTime lastTouchedTime() {
+        return store().lastTouchedTime();
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,15 +28,19 @@ import org.openjdk.skara.jcheck.JCheckConfiguration;
 
 import java.util.*;
 import java.util.regex.*;
-import java.util.stream.Collectors;
 
 class ReviewersTracker {
-    private static final String REVIEWERS_MARKER = "<!-- additional required reviewers id marker (%d) (%s) -->";
+    static final Source DEFAULT_SOURCE = Source.USER;
+    private static final String REVIEWERS_MARKER = "<!-- additional required reviewers id marker (%d) (%s) (%s)-->";
     private static final Pattern REVIEWERS_MARKER_PATTERN = Pattern.compile(
-            "<!-- additional required reviewers id marker \\((\\d+)\\) \\((\\w+)\\) -->");
+            "<!-- additional required reviewers id marker \\((\\d+)\\) \\((\\w+)\\)(?: \\(([^)]*)\\))?\\s*-->");
 
     static String setReviewersMarker(int numReviewers, String role) {
-        return String.format(REVIEWERS_MARKER, numReviewers, role);
+        return setReviewersMarker(numReviewers, role, DEFAULT_SOURCE);
+    }
+
+    static String setReviewersMarker(int numReviewers, String role, Source source) {
+        return String.format(REVIEWERS_MARKER, numReviewers, role, source.value());
     }
 
     static LinkedHashMap<String, Integer> updatedRoleLimits(JCheckConfiguration checkConfiguration, int count, String role) {
@@ -92,13 +96,41 @@ class ReviewersTracker {
         return updatedLimits;
     }
 
+    enum Source {
+        USER("user"),
+        BOT("bot");
+
+        private final String value;
+
+        Source(String value) {
+            this.value = value;
+        }
+
+        String value() {
+            return value;
+        }
+
+        static Source fromValue(String value) {
+            return Arrays.stream(values())
+                    .filter(source -> source.value.equals(value))
+                    .findFirst()
+                    .orElse(USER);
+        }
+    }
+
     static class AdditionalRequiredReviewers {
         private int number;
         private String role;
+        private Source source;
 
         AdditionalRequiredReviewers(int number, String role) {
+            this(number, role, DEFAULT_SOURCE);
+        }
+
+        AdditionalRequiredReviewers(int number, String role, Source source) {
             this.number = number;
             this.role = role;
+            this.source = source;
         }
 
         int number() {
@@ -108,6 +140,10 @@ class ReviewersTracker {
         String role() {
             return role;
         }
+
+        Source source() {
+            return source;
+        }
     }
 
     static Optional<AdditionalRequiredReviewers> additionalRequiredReviewers(HostUser botUser, List<Comment> comments) {
@@ -115,11 +151,15 @@ class ReviewersTracker {
                                        .filter(comment -> comment.author().equals(botUser))
                                        .map(comment -> REVIEWERS_MARKER_PATTERN.matcher(comment.body()))
                                        .filter(Matcher::find)
-                                       .collect(Collectors.toList());
+                                       .toList();
         if (reviewersActions.isEmpty()) {
             return Optional.empty();
         }
         var last = reviewersActions.getLast();
-        return Optional.of(new AdditionalRequiredReviewers(Integer.parseInt(last.group(1)), last.group(2)));
+        var sourceValue = last.group(3);
+        var source = sourceValue == null || sourceValue.isBlank()
+                ? DEFAULT_SOURCE
+                : Source.fromValue(sourceValue);
+        return Optional.of(new AdditionalRequiredReviewers(Integer.parseInt(last.group(1)), last.group(2), source));
     }
 }

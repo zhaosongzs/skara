@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -91,6 +91,11 @@ public class PullRequestBotFactory implements BotFactory {
                     .forEach(id -> excludeCommitCommentsFrom.add(id));
         }
 
+        var workItemBatchSize = PullRequestBot.DEFAULT_WORK_ITEM_BATCH_SIZE;
+        if (specific.contains("workItemBatchSize")) {
+            workItemBatchSize = specific.get("workItemBatchSize").asInt();
+        }
+
         var readyLabels = specific.get("ready").get("labels").stream()
                                   .map(JSONValue::asString)
                                   .collect(Collectors.toSet());
@@ -113,6 +118,14 @@ public class PullRequestBotFactory implements BotFactory {
             }
         }
 
+        List<String> requiredCheckedLines = new ArrayList<String>();
+        if (specific.contains("requiredCheckedLines")) {
+            requiredCheckedLines =
+                specific.get("requiredCheckedLines").asArray().stream().map(JSONValue::asString).toList();
+        }
+
+        var globalTrailers = parseTrailers(specific.get("trailers"));
+
         for (var repo : specific.get("repositories").fields()) {
             var censusRepo = configuration.repository(repo.value().get("census").asString());
             var censusRef = configuration.repositoryRef(repo.value().get("census").asString());
@@ -129,7 +142,9 @@ public class PullRequestBotFactory implements BotFactory {
                                            .seedStorage(configuration.storageFolder().resolve("seeds"))
                                            .excludeCommitCommentsFrom(excludeCommitCommentsFrom)
                                            .forks(forks)
-                                           .mlbridgeBotName(mlbridgeBotName);
+                                           .mlbridgeBotName(mlbridgeBotName)
+                                           .requiredCheckedLines(requiredCheckedLines)
+                                           .workItemBatchSize(workItemBatchSize);
 
             if (repo.value().contains("labels")) {
                 var labelGroup = repo.value().get("labels").asString();
@@ -274,6 +289,24 @@ public class PullRequestBotFactory implements BotFactory {
                 botBuilder.checkContributorStatusForBackportCommand(repo.value().get("checkContributorStatusForBackportCommand").asBoolean());
             }
 
+            // A repository can override the "default" required checked lines that are
+            // configured for all repositories handled by the bot.
+            if (repo.value().contains("requiredCheckedLines")) {
+                var requiredCheckedLinesOverride = repo.value()
+                                                       .get("requiredCheckedLines")
+                                                       .asArray()
+                                                       .stream()
+                                                       .map(JSONValue::asString)
+                                                       .toList();
+                botBuilder.requiredCheckedLines(requiredCheckedLinesOverride);
+            }
+
+            var trailers = parseTrailers(repo.value().get("trailers"));
+            if (trailers.isEmpty()) {
+                trailers = globalTrailers;
+            }
+            botBuilder.trailerConfigs(trailers);
+
             var prBot = botBuilder.build();
             pullRequestBotMap.put(repository.name(), prBot);
             ret.add(prBot);
@@ -292,5 +325,39 @@ public class PullRequestBotFactory implements BotFactory {
         }
 
         return ret;
+    }
+
+    private List<TrailerCommand.TrailerConfig> parseTrailers(JSONValue trailerArray) {
+        if (trailerArray != null) {
+            return trailerArray.asArray().stream()
+                    .map(js -> {
+                        var values = js.get("values");
+                        List<Pattern> patternList;
+                        if (values.isArray()) {
+                            patternList = values.stream()
+                                    .map(v -> Pattern.compile(v.asString()))
+                                    .toList();
+                        } else {
+                            patternList = List.of(Pattern.compile(values.asString()));
+                        }
+                        // default type is "single"
+                        var type = TrailerCommand.TrailerType.fromString(js.contains("type") ? js.get("type").asString() : "single");
+                        JSONValue jsonAlias = js.get("alias");
+                        String alias;
+                        if (jsonAlias == null) {
+                            alias = null;
+                        } else {
+                            alias = jsonAlias.asString();
+                        }
+                        return new TrailerCommand.TrailerConfig(js.get("key").asString(),
+                                alias,
+                                js.get("description").asString(),
+                                type,
+                                patternList);
+                    })
+                    .toList();
+        } else {
+            return List.of();
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -105,16 +105,17 @@ public class LabelTests {
             // One more
             pr.addComment("/cc group");
             TestBotRunner.runPeriodicItems(prBot);
+            assertTrue(pr.store().labelNames().contains("group"));
+            assertTrue(pr.store().labelNames().contains("1"));
 
             // The bot should reply with a success message
             assertLastCommentContains(pr,"The `group` label was successfully added.");
 
-            // Drop both
-            pr.addComment("        /skara label remove 1   group");
+            // Drop group
+            pr.addComment("        /skara label remove   group");
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with a success message
-            assertLastCommentContains(pr,"The `1` label was successfully removed.");
             assertLastCommentContains(pr,"The `group` label was successfully removed.");
 
             // And once more
@@ -141,6 +142,7 @@ public class LabelTests {
                                                            .addMatchers("1", List.of(Pattern.compile("cpp$")))
                                                            .addMatchers("2", List.of(Pattern.compile("hpp$")))
                                                            .addGroup("group", List.of("1", "2"))
+                                                           .addGroup("group2", List.of("1", "3"))
                                                            .addExtra("extra")
                                                            .build();
             var prBot = PullRequestBot.newBuilder()
@@ -178,15 +180,22 @@ public class LabelTests {
             editHash = localRepo.commit("Another one", "duke", "duke@openjdk.org");
             localRepo.push(editHash, author.authenticatedUrl(), "edit");
 
-            // The bot should not apply labels since the user has manually removed labels
+            // The bot should add label "1" since test.cpp is touched
             TestBotRunner.runPeriodicItems(prBot);
-            assertEquals(Set.of("rfr"), new HashSet<>(pr.store().labelNames()));
+            // After label "1" is added, in the next CheckWorkItem, rfr should be added
+            TestBotRunner.runPeriodicItems(prBot);
+            assertEquals(Set.of("1", "rfr"), new HashSet<>(pr.store().labelNames()));
 
             // Adding the label manually is fine
             pr.addComment("/label add group");
             TestBotRunner.runPeriodicItems(prBot);
             assertLastCommentContains(pr, "The `group` label was successfully added.");
-            assertEquals(Set.of("group", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertEquals(Set.of("1", "group", "rfr"), new HashSet<>(pr.store().labelNames()));
+
+            pr.addComment("/label add group2");
+            TestBotRunner.runPeriodicItems(prBot);
+            assertLastCommentContains(pr, "The `group2` label was successfully added.");
+            assertEquals(Set.of("1", "group", "group2", "rfr"), new HashSet<>(pr.store().labelNames()));
         }
     }
 
@@ -225,26 +234,28 @@ public class LabelTests {
             var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
             pr.setBody("/cc 1");
 
-            // The bot will not add any label automatically
+            // Although manually added label 1, the auto labeling should still happen
             TestBotRunner.runPeriodicItems(prBot);
-            assertEquals(Set.of("1", "rfr"), new HashSet<>(pr.store().labelNames()));
-            assertEquals(2, pr.comments().size());
-            assertLastCommentContains(pr, "The `1` label was successfully added.");
+            // Since there is already a component associated, rfr should be added
+            assertLastCommentContains(pr, "The following label will be automatically applied to this pull request:");
+            // hpp file would let the bot add label "2", since the user manually added "1", so "2" will be upgraded to "group"
+            assertEquals(Set.of("1", "group", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertEquals(3, pr.comments().size());
+            assertTrue(pr.store().comments().get(1).body().contains("The `1` label was successfully added."));
 
-            // Add another file to trigger a group match
-            Files.writeString(localRepoFolder.resolve("test.cpp"), "Hello there");
-            localRepo.add(Path.of("test.cpp"));
+            // Add another file to trigger label 2
+            Files.writeString(localRepoFolder.resolve("test2.hpp"), "Hello there");
+            localRepo.add(Path.of("test2.hpp"));
             editHash = localRepo.commit("Another one", "duke", "duke@openjdk.org");
             localRepo.push(editHash, author.authenticatedUrl(), "edit");
 
-            // The bot will still not do any automatic labelling
             TestBotRunner.runPeriodicItems(prBot);
-            assertEquals(Set.of("1", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertEquals(Set.of("1", "group", "rfr"), new HashSet<>(pr.store().labelNames()));
 
             // Adding manually is still fine
             pr.addComment("/label add group 2");
             TestBotRunner.runPeriodicItems(prBot);
-            assertLastCommentContains(pr, "The `group` label was successfully added.");
+            assertLastCommentContains(pr, "The `group` label was already applied.");
             assertLastCommentContains(pr, "The `2` label was successfully added.");
             assertEquals(Set.of("1", "2", "group", "rfr"), new HashSet<>(pr.store().labelNames()));
         }
@@ -342,6 +353,8 @@ public class LabelTests {
             localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
             var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
 
+            TestBotRunner.runPeriodicItems(prBot);
+
             // Add a label with -dev suffix
             pr.addComment("/label add 1-dev");
             TestBotRunner.runPeriodicItems(prBot);
@@ -355,61 +368,6 @@ public class LabelTests {
 
             // The bot should reply with a success message
             assertLastCommentContains(pr,"The `group` label was successfully added.");
-        }
-    }
-
-    @Test
-    void twoReviewersLabels(TestInfo testInfo) throws IOException {
-        try (var credentials = new HostCredentials(testInfo);
-             var tempFolder = new TemporaryDirectory()) {
-            var author = credentials.getHostedRepository();
-            var integrator = credentials.getHostedRepository();
-
-            var censusBuilder = credentials.getCensusBuilder()
-                                           .addReviewer(integrator.forge().currentUser().id())
-                                           .addCommitter(author.forge().currentUser().id());
-            var labelConfiguration = LabelConfigurationJson.builder()
-                                                       .addMatchers("1", List.of(Pattern.compile("cpp$")))
-                                                       .addMatchers("2", List.of(Pattern.compile("hpp$")))
-                                                       .addGroup("group", List.of("1", "2"))
-                                                       .addExtra("extra")
-                                                       .build();
-            var prBot = PullRequestBot.newBuilder()
-                                      .repo(integrator)
-                                      .censusRepo(censusBuilder.build())
-                                      .twoReviewersLabels(Set.of("1"))
-                                      .labelConfiguration(labelConfiguration)
-                                      .build();
-
-            // Populate the projects repository
-            var localRepoFolder = tempFolder.path().resolve("localrepo");
-            var localRepo = CheckableRepository.init(localRepoFolder, author.repositoryType());
-            var masterHash = localRepo.resolve("master").orElseThrow();
-            assertFalse(CheckableRepository.hasBeenEdited(localRepo));
-            localRepo.push(masterHash, author.authenticatedUrl(), "master", true);
-
-            // Make a change with a corresponding PR
-            var editHash = CheckableRepository.appendAndCommit(localRepo);
-            localRepo.push(editHash, author.authenticatedUrl(), "edit", true);
-            var pr = credentials.createPullRequest(author, "master", "edit", "123: This is a pull request");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // Add a label with -dev suffix
-            pr.addComment("/label add 1");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // The bot should reply with a success message
-            assertLastCommentContains(pr,"The `1` label was successfully added.");
-
-            // Review the PR
-            var prAsReviewer = integrator.pullRequest(pr.id());
-            prAsReviewer.addReview(Review.Verdict.APPROVED, "Looks good!");
-            TestBotRunner.runPeriodicItems(prBot);
-
-            // The bot should reply with a integration message
-            assertFirstCommentContains(pr, "This change now passes all *automated* pre-integration checks");
-            assertFirstCommentContains(pr, ":mag: One or more changes in this pull request modifies files");
-            assertFirstCommentContains(pr, "in areas of the source code that often require two reviewers.");
         }
     }
 
@@ -518,33 +476,34 @@ public class LabelTests {
 
             // The bot should reply with a success message
             assertLastCommentContains(pr,"The `2` label was successfully added.");
+            // label "1" and "2" should be upgraded to "group"
             assertEquals(Set.of("1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
 
             // Remove a label with `-`
-            pr.addComment("/label -2");
+            pr.addComment("/label -group");
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with a success message
-            assertLastCommentContains(pr,"The `2` label was successfully removed.");
-            assertEquals(Set.of("1", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertLastCommentContains(pr, "The `group` label was not set.");
+            // The rfr label should be removed because the pr is not associated with any component
+            assertEquals(Set.of("1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
 
             // Add a label with `+`
             pr.addComment("/label +group");
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with a success message
-            assertLastCommentContains(pr,"The `group` label was successfully added.");
-            assertEquals(Set.of("1", "rfr", "group"), new HashSet<>(pr.store().labelNames()));
+            assertLastCommentContains(pr, "The `group` label was successfully added.");
+            assertEquals(Set.of("1", "2", "rfr", "group"), new HashSet<>(pr.store().labelNames()));
 
             // Mixed `+/-` labels
-            pr.addComment("/label -1,+2,-group");
+            pr.addComment("/label +2,-group");
             TestBotRunner.runPeriodicItems(prBot);
 
             // The bot should reply with the success messages
-            assertLastCommentContains(pr,"The `1` label was successfully removed.");
-            assertLastCommentContains(pr,"The `2` label was successfully added.");
+            assertLastCommentContains(pr,"The `2` label was already applied.");
             assertLastCommentContains(pr,"The `group` label was successfully removed.");
-            assertEquals(Set.of("2", "rfr"), new HashSet<>(pr.store().labelNames()));
+            assertEquals(Set.of("1", "2", "rfr"), new HashSet<>(pr.store().labelNames()));
 
             // Mixed `+/-` labels again and check that the alias works as well
             pr.addComment("/label group, +1, -2");
@@ -552,7 +511,7 @@ public class LabelTests {
 
             // The bot should reply with the success messages
             assertLastCommentContains(pr,"The `group` label was successfully added.");
-            assertLastCommentContains(pr,"The `1` label was successfully added.");
+            assertLastCommentContains(pr,"The `1` label was already applied");
             assertLastCommentContains(pr,"The `2` label was successfully removed.");
             assertEquals(Set.of("1", "rfr", "group"), new HashSet<>(pr.store().labelNames()));
 

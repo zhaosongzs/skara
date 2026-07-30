@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,7 @@ class PullRequestBotFactoryTest {
                           1,
                           2
                       ],
+                      "workItemBatchSize": 3,
                       "blockers": {
                         "test": "Signature needs verify"
                       },
@@ -62,6 +63,16 @@ class PullRequestBotFactoryTest {
                           "filename": "file.json"
                         }
                       },
+                      "requiredCheckedLines": [ "foo" ],
+                      "trailers": [
+                        {
+                          "key": "global-trailer",
+                          "alias": "global",
+                          "description": "Example global trailer",
+                          "type": "single",
+                          "values": "foo.*"
+                        }
+                      ],
                       "repositories": {
                         "repo2": {
                           "census": "census:master",
@@ -104,7 +115,8 @@ class PullRequestBotFactoryTest {
                             "integrator2"
                           ],
                           "reviewCleanBackport": true,
-                          "processCommit": false
+                          "processCommit": false,
+                          "requiredCheckedLines": [ "bar" ]
                         },
                         "repo6": {
                           "census": "census:master",
@@ -157,6 +169,17 @@ class PullRequestBotFactoryTest {
                           },
                           "versionMismatchWarning": true,
                           "cleanCommandEnabled": false,
+                          "trailers": [
+                            {
+                              "key": "trailer-1",
+                              "description": "Example repo specific trailer",
+                              "type": "list",
+                              "values": [
+                                "foo",
+                                "bar"
+                              ]
+                            }
+                          ],
                         }
                       },
                       "forks": {
@@ -200,6 +223,15 @@ class PullRequestBotFactoryTest {
             assertTrue(pullRequestBot2.mergeSources().contains("openjdk/playground"));
             assertFalse(pullRequestBot2.jcheckMerge());
             assertFalse(pullRequestBot2.enableBackport());
+            assertEquals(List.of("foo"), pullRequestBot2.requiredCheckedLines());
+            assertEquals(1, pullRequestBot2.trailerConfigs().size());
+            TrailerCommand.TrailerConfig trailerConfig = pullRequestBot2.trailerConfigs().getFirst();
+            assertEquals("global-trailer", trailerConfig.key());
+            assertEquals("global", trailerConfig.alias());
+            assertEquals("Example global trailer", trailerConfig.description());
+            assertEquals(TrailerCommand.TrailerType.SINGLE, trailerConfig.type());
+            assertEquals("foo.*", trailerConfig.values().getFirst().pattern());
+            assertEquals(3, pullRequestBot2.workItemBatchSize());
 
             var pullRequestBot5 = (PullRequestBot) bots.stream()
                     .filter(bot -> bot.toString().equals("PullRequestBot@repo5"))
@@ -210,6 +242,8 @@ class PullRequestBotFactoryTest {
             assertTrue(pullRequestBot5.enableBackport());
             assertFalse(pullRequestBot5.versionMismatchWarning());
             assertTrue(pullRequestBot5.cleanCommandEnabled());
+            assertEquals(List.of("bar"), pullRequestBot5.requiredCheckedLines());
+            assertEquals(1, pullRequestBot5.trailerConfigs().size());
 
             var pullRequestBot6 = (PullRequestBot) bots.stream()
                     .filter(bot -> bot.toString().equals("PullRequestBot@repo6"))
@@ -236,6 +270,8 @@ class PullRequestBotFactoryTest {
             assertTrue(pullRequestBot6.jcheckMerge());
             assertTrue(pullRequestBot6.enableBackport());
             assertFalse(pullRequestBot6.versionMismatchWarning());
+            assertEquals(List.of("foo"), pullRequestBot6.requiredCheckedLines());
+            assertEquals(1, pullRequestBot6.trailerConfigs().size());
 
             var pullRequestBot7 = (PullRequestBot) bots.stream()
                     .filter(bot -> bot.toString().equals("PullRequestBot@repo7"))
@@ -245,6 +281,15 @@ class PullRequestBotFactoryTest {
             assertEquals("https://example.com", pullRequestBot7.approval().documentLink());
             assertTrue(pullRequestBot7.versionMismatchWarning());
             assertFalse(pullRequestBot7.cleanCommandEnabled());
+            assertEquals(List.of("foo"), pullRequestBot7.requiredCheckedLines());
+            assertEquals(1, pullRequestBot7.trailerConfigs().size());
+            TrailerCommand.TrailerConfig trailerConfig1 = pullRequestBot7.trailerConfigs().getFirst();
+            assertEquals("trailer-1", trailerConfig1.key());
+            assertNull(trailerConfig1.alias());
+            assertEquals("Example repo specific trailer", trailerConfig1.description());
+            assertEquals(TrailerCommand.TrailerType.LIST, trailerConfig1.type());
+            assertEquals("foo", trailerConfig1.values().getFirst().pattern());
+            assertEquals("bar", trailerConfig1.values().get(1).pattern());
 
             var csrIssueBot1 = (CSRIssueBot) bots.stream()
                     .filter(bot -> bot.toString().equals("CSRIssueBot@TEST"))

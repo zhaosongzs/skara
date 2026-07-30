@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,15 +111,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -128,8 +129,7 @@ class MailingListBridgeBotTests {
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                                             .ignoredComments(Set.of())
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
+                                            .mailingListServer(mailmanServer)
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
@@ -138,7 +138,6 @@ class MailingListBridgeBotTests {
                                             .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                                             .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                                            .sendInterval(Duration.ZERO)
                                             .build();
 
             // Populate the projects repository
@@ -230,8 +229,7 @@ class MailingListBridgeBotTests {
 
             // The mailing list as well
             listServer.processIncoming();
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -307,15 +305,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -323,13 +322,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -400,15 +398,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -416,13 +415,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -474,15 +472,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -490,13 +489,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -553,15 +551,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -569,14 +568,13 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .readyLabels(Set.of("rfr"))
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -630,15 +628,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -646,14 +645,13 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .readyLabels(Set.of("rfr"))
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -719,15 +717,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -735,13 +734,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -773,15 +771,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -789,13 +788,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -835,8 +833,7 @@ class MailingListBridgeBotTests {
             assertFalse(archiveContains(archiveFolder.path(), "Don't mind me"));
 
             // The mailing list as well
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -882,27 +879,27 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -936,8 +933,7 @@ class MailingListBridgeBotTests {
             assertEquals(2, archiveContainsCount(archiveFolder.path(), "^On.*wrote:"));
 
             // As well as the mailing list
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -979,29 +975,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1057,8 +1053,7 @@ class MailingListBridgeBotTests {
             assertTrue(archiveText.indexOf("Looks fine") < archiveText.indexOf("The final review comment"));
 
             // Check the mailing list
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -1108,29 +1103,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1180,29 +1175,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1244,29 +1239,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1309,29 +1304,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1374,27 +1369,27 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1430,27 +1425,27 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1506,27 +1501,27 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1595,28 +1590,28 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var commenter = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1667,8 +1662,7 @@ class MailingListBridgeBotTests {
             assertEquals(1, webrevComments.size());
 
             // Check that sender address is set properly
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             for (var newMail : conversations.get(0).allMessages()) {
@@ -1706,28 +1700,28 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository("author");
             var main = credentials.getHostedRepository("main");
             var archive = credentials.getHostedRepository("archive");
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var sender = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(sender)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1775,8 +1769,7 @@ class MailingListBridgeBotTests {
             assertEquals(1, webrevComments.size());
 
             // Check that sender address is set properly
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             for (var newMail : conversations.get(0).allMessages()) {
@@ -1793,28 +1786,28 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository("author");
             var main = credentials.getHostedRepository("main");
             var archive = credentials.getHostedRepository("archive");
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var sender = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                     .from(sender)
                     .repo(author)
                     .archive(archive)
                     .censusRepo(censusBuilder.build())
                     .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                    .listArchive(listServer.getArchive())
-                    .smtpServer(listServer.getSMTP())
                     .webrevStorageHTMLRepository(archive)
                     .webrevStorageRef("webrev")
                     .webrevStorageBase(Path.of("test"))
                     .webrevStorageBaseUri(webrevServer.uri())
                     .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                    .mailingListServer(mailmanServer)
                     .build();
 
             // Populate the projects repository
@@ -1869,8 +1862,7 @@ class MailingListBridgeBotTests {
             assertEquals(1, webrevComments.size());
 
             // Check that sender address is set properly
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             for (var newMail : conversations.get(0).allMessages()) {
@@ -1887,14 +1879,15 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var sender = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(sender)
                                             .repo(author)
@@ -1902,13 +1895,12 @@ class MailingListBridgeBotTests {
                                             .archiveRef("archive")
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -1966,15 +1958,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var commenter = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -1982,13 +1975,12 @@ class MailingListBridgeBotTests {
                                             .archiveRef("archive")
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2052,15 +2044,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var commenter = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -2068,13 +2061,12 @@ class MailingListBridgeBotTests {
                                             .archiveRef("archive")
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2124,15 +2116,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var commenter = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -2140,13 +2133,12 @@ class MailingListBridgeBotTests {
                                             .archiveRef("archive")
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2195,15 +2187,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -2211,13 +2204,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2275,29 +2267,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var from = EmailAddress.from("test", "test@test.mail");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2344,8 +2336,7 @@ class MailingListBridgeBotTests {
             listServer.processIncoming();
             listServer.processIncoming();
             listServer.processIncoming();
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertTrue(conversations.get(0).allMessages().get(1).body().contains("hosted.git/pr/1/review/0"));
             assertTrue(conversations.get(0).allMessages().get(2).body().contains("hosted.git/pr/1/review/1"));
@@ -2368,15 +2359,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -2385,13 +2377,12 @@ class MailingListBridgeBotTests {
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                                             .ignoredComments(Set.of(Pattern.compile("ignore this comment", Pattern.MULTILINE | Pattern.DOTALL)))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2434,29 +2425,29 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var reviewer = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addReviewer(reviewer.forge().currentUser().id())
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2495,15 +2486,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var bot = credentials.getHostedRepository();
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBotBuilder = MailingListBridgeBot.newBuilder()
                                                    .from(from)
                                                    .repo(bot)
@@ -2511,13 +2503,12 @@ class MailingListBridgeBotTests {
                                                    .archive(archive)
                                                    .censusRepo(censusBuilder.build())
                                                    .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                                   .listArchive(listServer.getArchive())
-                                                   .smtpServer(listServer.getSMTP())
                                                    .webrevStorageHTMLRepository(archive)
                                                    .webrevStorageRef("webrev")
                                                    .webrevStorageBase(Path.of("test"))
                                                    .webrevStorageBaseUri(webrevServer.uri())
-                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build());
+                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                                   .mailingListServer(mailmanServer);
 
             // Populate the projects repository
             var reviewFile = Path.of("reviewfile.txt");
@@ -2560,15 +2551,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var bot = credentials.getHostedRepository();
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBotBuilder = MailingListBridgeBot.newBuilder()
                                                    .from(from)
                                                    .repo(bot)
@@ -2576,13 +2568,12 @@ class MailingListBridgeBotTests {
                                                    .archive(archive)
                                                    .censusRepo(censusBuilder.build())
                                                    .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                                   .listArchive(listServer.getArchive())
-                                                   .smtpServer(listServer.getSMTP())
                                                    .webrevStorageHTMLRepository(archive)
                                                    .webrevStorageRef("webrev")
                                                    .webrevStorageBase(Path.of("test"))
                                                    .webrevStorageBaseUri(webrevServer.uri())
-                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build());
+                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                                   .mailingListServer(mailmanServer);
 
             // Populate the projects repository
             var reviewFile = Path.of("reviewfile.txt");
@@ -2626,16 +2617,17 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var bot = credentials.getHostedRepository();
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
             var cooldown = Duration.ofMillis(500);
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBotBuilder = MailingListBridgeBot.newBuilder()
                                                    .from(from)
                                                    .repo(bot)
@@ -2643,13 +2635,12 @@ class MailingListBridgeBotTests {
                                                    .archive(archive)
                                                    .censusRepo(censusBuilder.build())
                                                    .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                                   .listArchive(listServer.getArchive())
-                                                   .smtpServer(listServer.getSMTP())
                                                    .webrevStorageHTMLRepository(archive)
                                                    .webrevStorageRef("webrev")
                                                    .webrevStorageBase(Path.of("test"))
                                                    .webrevStorageBaseUri(webrevServer.uri())
-                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build());
+                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                                   .mailingListServer(mailmanServer);
 
             // Populate the projects repository
             var reviewFile = Path.of("reviewfile.txt");
@@ -2718,28 +2709,28 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                                             .branchInSubject(Pattern.compile(".*"))
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2775,28 +2766,28 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                                             .repoInSubject(true)
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2832,22 +2823,21 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
@@ -2855,6 +2845,7 @@ class MailingListBridgeBotTests {
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                                             .repoInSubject(true)
                                             .branchInSubject(Pattern.compile(".*"))
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -2890,16 +2881,17 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var bot = credentials.getHostedRepository();
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
             var cooldown = Duration.ofMillis(500);
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBotBuilder = MailingListBridgeBot.newBuilder()
                                                    .from(from)
                                                    .repo(bot)
@@ -2907,13 +2899,12 @@ class MailingListBridgeBotTests {
                                                    .archive(archive)
                                                    .censusRepo(censusBuilder.build())
                                                    .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                                   .listArchive(listServer.getArchive())
-                                                   .smtpServer(listServer.getSMTP())
                                                    .webrevStorageHTMLRepository(archive)
                                                    .webrevStorageRef("webrev")
                                                    .webrevStorageBase(Path.of("test"))
                                                    .webrevStorageBaseUri(webrevServer.uri())
-                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build());
+                                                   .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                                   .mailingListServer(mailmanServer);
 
             // Populate the projects repository
             var reviewFile = Path.of("reviewfile.txt");
@@ -2983,15 +2974,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress1 = EmailAddress.parse(listServer.createList("test1"));
-            var listAddress2 = EmailAddress.parse(listServer.createList("test2"));
+            var listAddress1 = listServer.createList("test1");
+            var listAddress2 = listServer.createList("test2");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -2999,13 +2991,12 @@ class MailingListBridgeBotTests {
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress1, Set.of("list1")),
                                                            new MailingListConfiguration(listAddress2, Set.of("list2"))))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -3027,8 +3018,7 @@ class MailingListBridgeBotTests {
             listServer.processIncoming();
 
             // The mail should have been sent to list1
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress1.address());
+            var mailmanList = mailmanServer.getListReader(listAddress1);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -3062,15 +3052,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory(false);
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -3079,8 +3070,6 @@ class MailingListBridgeBotTests {
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                                             .ignoredComments(Set.of())
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageJSONRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
@@ -3091,7 +3080,7 @@ class MailingListBridgeBotTests {
                                             .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                                             .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                                            .sendInterval(Duration.ZERO)
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -3159,8 +3148,7 @@ class MailingListBridgeBotTests {
 
             // The mailing list as well
             listServer.processIncoming();
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -3263,15 +3251,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
@@ -3280,8 +3269,6 @@ class MailingListBridgeBotTests {
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                                             .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                                             .ignoredComments(Set.of())
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
@@ -3289,7 +3276,7 @@ class MailingListBridgeBotTests {
                                             .readyLabels(Set.of("rfr"))
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                                             .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                                            .sendInterval(Duration.ZERO)
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -3351,27 +3338,27 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -3423,28 +3410,28 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var bridge = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                                            .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                                             .from(from)
                                             .repo(author)
                                             .archive(archive)
                                             .censusRepo(censusBuilder.build())
                                             .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                                            .listArchive(listServer.getArchive())
-                                            .smtpServer(listServer.getSMTP())
                                             .webrevStorageHTMLRepository(archive)
                                             .webrevStorageRef("webrev")
                                             .webrevStorageBase(Path.of("test"))
                                             .webrevStorageBaseUri(webrevServer.uri())
                                             .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                                            .mailingListServer(mailmanServer)
                                             .build();
 
             // Populate the projects repository
@@ -3499,15 +3486,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                     .from(from)
                     .repo(author)
@@ -3516,8 +3504,6 @@ class MailingListBridgeBotTests {
                     .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                     .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                     .ignoredComments(Set.of())
-                    .listArchive(listServer.getArchive())
-                    .smtpServer(listServer.getSMTP())
                     .webrevStorageHTMLRepository(archive)
                     .webrevStorageRef("webrev")
                     .webrevStorageBase(Path.of("test"))
@@ -3526,7 +3512,7 @@ class MailingListBridgeBotTests {
                     .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
                     .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                     .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                    .sendInterval(Duration.ZERO)
+                    .mailingListServer(mailmanServer)
                     .build();
 
             // Populate the repository.
@@ -3676,15 +3662,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                     .from(from)
                     .repo(author)
@@ -3693,8 +3680,6 @@ class MailingListBridgeBotTests {
                     .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                     .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                     .ignoredComments(Set.of())
-                    .listArchive(listServer.getArchive())
-                    .smtpServer(listServer.getSMTP())
                     .webrevStorageHTMLRepository(archive)
                     .webrevStorageRef("webrev")
                     .webrevStorageBase(Path.of("test"))
@@ -3705,7 +3690,7 @@ class MailingListBridgeBotTests {
                     .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
                     .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                     .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                    .sendInterval(Duration.ZERO)
+                    .mailingListServer(mailmanServer)
                     .build();
 
             // Populate the projects repository
@@ -3771,8 +3756,7 @@ class MailingListBridgeBotTests {
 
             // The mailing list as well
             listServer.processIncoming();
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -3822,15 +3806,16 @@ class MailingListBridgeBotTests {
         try (var credentials = new HostCredentials(testInfo);
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var commenter = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                     .from(from)
                     .repo(author)
@@ -3838,8 +3823,6 @@ class MailingListBridgeBotTests {
                     .archiveRef("archive")
                     .censusRepo(censusBuilder.build())
                     .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
-                    .listArchive(listServer.getArchive())
-                    .smtpServer(listServer.getSMTP())
                     .webrevStorageHTMLRepository(archive)
                     .webrevStorageRef("webrev")
                     .webrevStorageBase(Path.of("test"))
@@ -3847,6 +3830,7 @@ class MailingListBridgeBotTests {
                     .webrevGenerateJSON(false)
                     .webrevGenerateHTML(false)
                     .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
+                    .mailingListServer(mailmanServer)
                     .build();
 
             // Populate the projects repository
@@ -3908,15 +3892,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                     .from(from)
                     .repo(author)
@@ -3925,8 +3910,6 @@ class MailingListBridgeBotTests {
                     .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                     .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                     .ignoredComments(Set.of())
-                    .listArchive(listServer.getArchive())
-                    .smtpServer(listServer.getSMTP())
                     .webrevStorageHTMLRepository(archive)
                     .webrevStorageRef("webrev")
                     .webrevStorageBase(Path.of("test"))
@@ -3935,7 +3918,7 @@ class MailingListBridgeBotTests {
                     .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
                     .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                     .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                    .sendInterval(Duration.ZERO)
+                    .mailingListServer(mailmanServer)
                     .build();
 
             // Populate the projects repository
@@ -3980,8 +3963,7 @@ class MailingListBridgeBotTests {
 
             // The mailing list as well
             listServer.processIncoming();
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();
@@ -4002,15 +3984,16 @@ class MailingListBridgeBotTests {
              var tempFolder = new TemporaryDirectory();
              var archiveFolder = new TemporaryDirectory();
              var webrevFolder = new TemporaryDirectory();
-             var listServer = new TestMailmanServer();
+             var listServer = TestMailmanServer.createV3();
              var webrevServer = new TestWebrevServer()) {
             var author = credentials.getHostedRepository();
             var archive = credentials.getHostedRepository();
             var ignored = credentials.getHostedRepository();
-            var listAddress = EmailAddress.parse(listServer.createList("test"));
+            var listAddress = listServer.createList("test");
             var censusBuilder = credentials.getCensusBuilder()
                     .addAuthor(author.forge().currentUser().id());
             var from = EmailAddress.from("test", "test@test.mail");
+            var mailmanServer = MailingListServerFactory.createMailman3Server(listServer.getArchive(), new SmtpEmailSender(listServer.getSMTP()), Duration.ZERO);
             var mlBot = MailingListBridgeBot.newBuilder()
                     .from(from)
                     .repo(author)
@@ -4019,8 +4002,6 @@ class MailingListBridgeBotTests {
                     .lists(List.of(new MailingListConfiguration(listAddress, Set.of())))
                     .ignoredUsers(Set.of(ignored.forge().currentUser().username()))
                     .ignoredComments(Set.of())
-                    .listArchive(listServer.getArchive())
-                    .smtpServer(listServer.getSMTP())
                     .webrevStorageHTMLRepository(archive)
                     .webrevStorageRef("webrev")
                     .webrevStorageBase(Path.of("test"))
@@ -4029,7 +4010,7 @@ class MailingListBridgeBotTests {
                     .readyComments(Map.of(ignored.forge().currentUser().username(), Pattern.compile("ready")))
                     .issueTracker(URIBuilder.base("http://issues.test/browse/").build())
                     .headers(Map.of("Extra1", "val1", "Extra2", "val2"))
-                    .sendInterval(Duration.ZERO)
+                    .mailingListServer(mailmanServer)
                     .build();
 
             // Populate the projects repository
@@ -4063,8 +4044,7 @@ class MailingListBridgeBotTests {
             assertTrue(pr.store().comments().get(1).body().contains("[Full](Webrev is not available because diff is too large)"));
             // The mailing list as well
             listServer.processIncoming();
-            var mailmanServer = MailingListServerFactory.createMailmanServer(listServer.getArchive(), listServer.getSMTP(), Duration.ZERO);
-            var mailmanList = mailmanServer.getListReader(listAddress.address());
+            var mailmanList = mailmanServer.getListReader(listAddress);
             var conversations = mailmanList.conversations(Duration.ofDays(1));
             assertEquals(1, conversations.size());
             var mail = conversations.get(0).first();

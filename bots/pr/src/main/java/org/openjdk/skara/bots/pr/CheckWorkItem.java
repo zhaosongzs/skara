@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,10 +58,13 @@ import static org.openjdk.skara.forge.PullRequestUtils.mergeSourcePattern;
 class CheckWorkItem extends PullRequestWorkItem {
     private final Logger log = Logger.getLogger("org.openjdk.skara.bots.pr");
     static final Pattern ISSUE_ID_PATTERN = Pattern.compile("^(?:(?<prefix>[A-Za-z][A-Za-z0-9]+)-)?(?<id>[0-9]+)"
-            + "(?::?(?<space>[\\s\u00A0\u2007\u202F]+)(?<title>.+))?$");
+            + "(?:(?:\\s*:)?(?<space>[\\s\u00A0\u2007\u202F]+)(?<title>.+))?$");
     private static final Pattern BACKPORT_HASH_TITLE_PATTERN = Pattern.compile("^Backport\\s*([0-9a-z]{40})\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern BACKPORT_ISSUE_TITLE_PATTERN = Pattern.compile("^Backport\\s*(?:(?<prefix>[A-Za-z][A-Za-z0-9]+)-)?(?<id>[0-9]+)\\s*$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern METADATA_COMMENTS_PATTERN = Pattern.compile("<!-- (?:backport)|(?:(add|remove) (?:contributor|reviewer))|(?:summary: ')|(?:solves: ')|(?:additional required reviewers)|(?:jep: ')|(?:csr: ')");
+    private static final Pattern METADATA_COMMENTS_PATTERN = Pattern.compile(
+            "<!-- (?:backport)|(?:(add|remove) (?:contributor|reviewer))|(?:summary: ')|(?:solves: ')|(?:additional required reviewers)|(?:jep: ')|(?:csr: ')|(?:trailer:)");
+    private static final String TWO_REVIEWERS_APPLIED_MARKER = "<!-- two-reviewers applied -->";
+    private static final String TWO_REVIEWERS_CLEARED_MARKER = "<!-- two-reviewers cleared -->";
     private static final String ELLIPSIS = "…";
     protected static final String FORCE_PUSH_MARKER = "<!-- force-push suggestion -->";
     protected static final String FORCE_PUSH_SUGGESTION= """
@@ -129,6 +132,13 @@ class CheckWorkItem extends PullRequestWorkItem {
         return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, false, false, false, false);
     }
 
+    /**
+     * Create Normal CheckWorkItem with force update
+     */
+    public static CheckWorkItem fromWorkItemWithForceUpdate(PullRequestBot bot, String prId, Consumer<RuntimeException> errorHandler, ZonedDateTime triggerUpdatedAt) {
+        return new CheckWorkItem(bot, prId, errorHandler, triggerUpdatedAt, false, true, false, false);
+    }
+
     private String encodeReviewer(HostUser reviewer, CensusInstance censusInstance) {
         var census = censusInstance.census();
         var project = censusInstance.project();
@@ -143,6 +153,67 @@ class CheckWorkItem extends PullRequestWorkItem {
                     project.isReviewer(username, censusVersion) + project.isCommitter(username, censusVersion) +
                     project.isAuthor(username, censusVersion);
         }
+    }
+
+    private List<Comment> ensureTwoReviewersLabelMarker(List<Comment> comments) {
+        if (bot.twoReviewersLabels().isEmpty()) {
+            return comments;
+        }
+
+        var botUser = pr.repository().forge().currentUser();
+        // If there is any user issued reviewers command, don't override it
+        var additionalRequiredReviewers = ReviewersTracker.additionalRequiredReviewers(botUser, comments);
+        if (additionalRequiredReviewers.isPresent() && additionalRequiredReviewers.get().source() == ReviewersTracker.Source.USER) {
+            return comments;
+        }
+
+        var latestTwoReviewersComment = comments.reversed().stream()
+                .filter(comment -> comment.author().equals(pr.repository().forge().currentUser()))
+                .filter(comment -> comment.body().contains(TWO_REVIEWERS_APPLIED_MARKER) || comment.body().contains(TWO_REVIEWERS_CLEARED_MARKER))
+                .findFirst();
+
+        if (pr.labelNames().contains("backport") || BACKPORT_ISSUE_TITLE_PATTERN.matcher(pr.title()).matches()
+                || BACKPORT_HASH_TITLE_PATTERN.matcher(pr.title()).matches() || PullRequestUtils.isMerge(pr)) {
+            // Backport or Merge PR
+            if (latestTwoReviewersComment.isEmpty()) {
+                return comments;
+            } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_CLEARED_MARKER)) {
+                return comments;
+            } else if (latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_APPLIED_MARKER)) {
+                var marker = ReviewersTracker.setReviewersMarker(0, "authors", ReviewersTracker.Source.BOT);
+                var prType = PullRequestUtils.isMerge(pr) ? "merge" : "backport";
+                var reviewersClearedComment = pr.addComment("This is now a " + prType + " PR, the extra reviewers requirement has been cleared.\n"
+                        + marker + "\n" + TWO_REVIEWERS_CLEARED_MARKER);
+                return Stream.concat(comments.stream(), Stream.of(reviewersClearedComment)).toList();
+            }
+        } else {
+            // Normal PR
+            if (Collections.disjoint(pr.labelNames(), bot.twoReviewersLabels())) {
+                return comments;
+            }
+
+            if (latestTwoReviewersComment.isEmpty() || latestTwoReviewersComment.get().body().contains(TWO_REVIEWERS_CLEARED_MARKER)) {
+                var matchingLabels = pr.labelNames().stream()
+                        .filter(label -> bot.twoReviewersLabels().contains(label))
+                        .sorted()
+                        .toList();
+                var labelsNoun = matchingLabels.size() == 1 ? "this label" : "these labels";
+
+                var marker = ReviewersTracker.setReviewersMarker(2, "authors", ReviewersTracker.Source.BOT);
+
+                var matchingLabelsList = matchingLabels.stream()
+                        .map(label -> "`" + label + "`")
+                        .collect(Collectors.joining(", "));
+
+                var reviewersAppliedComment = pr.addComment(
+                        "The total number of required reviews for this PR has been set to 2 based on the presence of " +
+                                labelsNoun + ": " + matchingLabelsList + ". " +
+                                "This can be overridden with the `/reviewers` command.\n" +
+                                marker + "\n" + TWO_REVIEWERS_APPLIED_MARKER);
+                return Stream.concat(comments.stream(), Stream.of(reviewersAppliedComment)).toList();
+            }
+        }
+        return comments;
     }
 
     /**
@@ -460,6 +531,7 @@ class CheckWorkItem extends PullRequestWorkItem {
         CensusInstance census;
         var comments = prComments();
         comments = postPlaceholderForReadyComment(comments);
+        comments = ensureTwoReviewersLabelMarker(comments);
 
         if (pr.headHash().hex() == null) {
             String text = "The head hash of this pull request is missing. " +
@@ -722,7 +794,7 @@ class CheckWorkItem extends PullRequestWorkItem {
 
                 var expiresAt = CheckRun.execute(this, pr, localRepo, comments, allReviews,
                         activeReviews, labels, census, bot.useStaleReviews(), bot.integrators(), bot.reviewCleanBackport(),
-                        bot.reviewMerge(), bot.approval());
+                        bot.reviewMerge(), bot.approval(), bot.requiredCheckedLines());
                 if (log.isLoggable(Level.INFO)) {
                     // Log latency from the original updatedAt of the PR when this WorkItem
                     // was triggered to when it was just updated by the CheckRun.execute above.

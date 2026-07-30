@@ -32,21 +32,21 @@ import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class MailmanTests {
+class Mailman2Tests {
     @Test
     void simple() throws IOException {
-        try (var testServer = new TestMailmanServer()) {
+        try (var testServer = TestMailmanServer.createV2()) {
             var listAddress = testServer.createList("test");
-            var mailmanServer = MailingListServerFactory.createMailmanServer(testServer.getArchive(), testServer.getSMTP(),
+            var mailmanServer = MailingListServerFactory.createMailman2Server(testServer.getArchive(), new SmtpEmailSender(testServer.getSMTP()),
                                                                              Duration.ZERO);
             var mailmanList = mailmanServer.getListReader(listAddress);
             var sender = EmailAddress.from("Test", "test@test.email");
             var mail = Email.create(sender, "Subject", "Body")
-                            .recipient(EmailAddress.parse(listAddress))
+                            .recipient(listAddress)
                             .build();
             mailmanServer.post(mail);
             var expectedMail = Email.from(mail)
-                                    .sender(EmailAddress.parse(listAddress))
+                                    .sender(listAddress)
                                     .build();
 
             testServer.processIncoming();
@@ -60,19 +60,19 @@ class MailmanTests {
 
     @Test
     void replies() throws IOException {
-        try (var testServer = new TestMailmanServer()) {
+        try (var testServer = TestMailmanServer.createV2()) {
             var listAddress = testServer.createList("test");
-            var mailmanServer = MailingListServerFactory.createMailmanServer(testServer.getArchive(), testServer.getSMTP(),
+            var mailmanServer = MailingListServerFactory.createMailman2Server(testServer.getArchive(), new SmtpEmailSender(testServer.getSMTP()),
                                                                              Duration.ZERO);
             var mailmanList = mailmanServer.getListReader(listAddress);
             var sender = EmailAddress.from("Test", "test@test.email");
             var sentParent = Email.create(sender, "Subject", "Body")
-                                  .recipient(EmailAddress.parse(listAddress))
+                                  .recipient(listAddress)
                                   .build();
             mailmanServer.post(sentParent);
             testServer.processIncoming();
             var expectedParent = Email.from(sentParent)
-                                      .sender(EmailAddress.parse(listAddress))
+                                      .sender(listAddress)
                                       .build();
 
             var conversations = mailmanList.conversations(Duration.ofDays(1));
@@ -82,12 +82,12 @@ class MailmanTests {
 
             var replier = EmailAddress.from("Replier", "replier@test.email");
             var sentReply = Email.create(replier, "Reply subject", "Reply body")
-                                 .recipient(EmailAddress.parse(listAddress))
+                                 .recipient(listAddress)
                                  .header("In-Reply-To", sentParent.id().toString())
                                  .build();
             mailmanServer.post(sentReply);
             var expectedReply = Email.from(sentReply)
-                                     .sender(EmailAddress.parse(listAddress))
+                                     .sender(listAddress)
                                      .build();
 
             testServer.processIncoming();
@@ -106,20 +106,20 @@ class MailmanTests {
 
     @Test
     void cached() throws IOException {
-        try (var testServer = new TestMailmanServer()) {
+        try (var testServer = TestMailmanServer.createV2()) {
             var listAddress = testServer.createList("test");
-            var mailmanServer = MailingListServerFactory.createMailmanServer(testServer.getArchive(), testServer.getSMTP(),
+            var mailmanServer = MailingListServerFactory.createMailman2Server(testServer.getArchive(), new SmtpEmailSender(testServer.getSMTP()),
                                                                              Duration.ZERO, true);
             var mailmanList = mailmanServer.getListReader(listAddress);
             var sender = EmailAddress.from("Test", "test@test.email");
             var mail = Email.create(sender, "Subject", "Body")
-                            .recipient(EmailAddress.parse(listAddress))
+                            .recipient(listAddress)
                             .build();
             mailmanServer.post(mail);
             testServer.processIncoming();
 
             var expectedMail = Email.from(mail)
-                                    .sender(EmailAddress.parse(listAddress))
+                                    .sender(listAddress)
                                     .build();
             {
                 var conversations = mailmanList.conversations(Duration.ofDays(1));
@@ -140,24 +140,24 @@ class MailmanTests {
 
     @Test
     void interval() throws IOException {
-        try (var testServer = new TestMailmanServer()) {
+        try (var testServer = TestMailmanServer.createV2()) {
             var listAddress = testServer.createList("test");
-            var mailmanServer = MailingListServerFactory.createMailmanServer(testServer.getArchive(), testServer.getSMTP(),
+            var mailmanServer = MailingListServerFactory.createMailman2Server(testServer.getArchive(), new SmtpEmailSender(testServer.getSMTP()),
                                                                              Duration.ofDays(1));
             var mailmanList = mailmanServer.getListReader(listAddress);
             var sender = EmailAddress.from("Test", "test@test.email");
             var mail1 = Email.create(sender, "Subject 1", "Body 1")
-                             .recipient(EmailAddress.parse(listAddress))
+                             .recipient(listAddress)
                              .build();
             var mail2 = Email.create(sender, "Subject 2", "Body 2")
-                             .recipient(EmailAddress.parse(listAddress))
+                             .recipient(listAddress)
                              .build();
             new Thread(() -> {
                 mailmanServer.post(mail1);
                 mailmanServer.post(mail2);
             }).start();
             var expectedMail = Email.from(mail1)
-                                    .sender(EmailAddress.parse(listAddress))
+                                    .sender(listAddress)
                                     .build();
 
             testServer.processIncoming();
@@ -172,23 +172,23 @@ class MailmanTests {
 
     @Test
     void poll3months() throws Exception {
-        try (var testServer = new TestMailmanServer()) {
+        try (var testServer = TestMailmanServer.createV2()) {
             var listAddress = testServer.createList("test");
-            var mailmanServer = MailingListServerFactory.createMailmanServer(testServer.getArchive(),
-                    testServer.getSMTP(), Duration.ZERO);
+            var mailmanServer = MailingListServerFactory.createMailman2Server(testServer.getArchive(),
+                    new SmtpEmailSender(testServer.getSMTP()), Duration.ZERO);
             var mailmanList = mailmanServer.getListReader(listAddress);
             var sender = EmailAddress.from("Test", "test@test.email");
             var now = ZonedDateTime.now();
             var mail2monthsAgo = Email.create(sender, "Subject 2 months ago", "Body 1")
-                    .recipient(EmailAddress.parse(listAddress))
+                    .recipient(listAddress)
                     .date(now.minusMonths(2))
                     .build();
             var mail1monthAgo = Email.create(sender, "Subject 1 month ago", "Body 2")
-                    .recipient(EmailAddress.parse(listAddress))
+                    .recipient(listAddress)
                     .date(now.minusMonths(1))
                     .build();
             var mailNow = Email.create(sender, "Subject now", "Body 3")
-                    .recipient(EmailAddress.parse(listAddress))
+                    .recipient(listAddress)
                     .build();
 
             var duration2Months = Duration.between(now.minusMonths(2), now);
@@ -228,7 +228,7 @@ class MailmanTests {
             {
                 // Another mail from last month should be found
                 var mail1monthAgo2 = Email.create(sender, "Subject 1 month ago 2", "Body 2")
-                        .recipient(EmailAddress.parse(listAddress))
+                        .recipient(listAddress)
                         .date(now.minusMonths(1))
                         .build();
                 mailmanServer.post(mail1monthAgo2);
@@ -241,7 +241,7 @@ class MailmanTests {
             {
                 // Another current mail should be found
                 var mailNow2 = Email.create(sender, "Subject now 2", "Body 3")
-                        .recipient(EmailAddress.parse(listAddress))
+                        .recipient(listAddress)
                         .build();
                 mailmanServer.post(mailNow2);
                 testServer.processIncoming();

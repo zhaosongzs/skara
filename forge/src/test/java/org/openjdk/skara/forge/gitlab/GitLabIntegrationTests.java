@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,7 +57,7 @@ class GitLabIntegrationTests {
             var token = props.get("gitlab.pat");
             var credential = new Credential(username, token);
             var uri = URIBuilder.base(props.get("gitlab.uri")).build();
-            gitLabHost = new GitLabHost("gitlab", uri, false, credential, Arrays.asList(props.get("gitlab.group").split(",")));
+            gitLabHost = new GitLabHost("gitlab", uri, false, credential, Arrays.asList(props.get("gitlab.group").split(",")), null);
         }
     }
 
@@ -407,5 +407,15 @@ class GitLabIntegrationTests {
         var pr = gitLabRepo.pullRequest(props.get("gitlab.merge.request.id"));
         var prDiff = pr.diff();
         assertFalse(prDiff.complete());
+    }
+
+    @Test
+    @EnabledIfTestProperties({"gitlab.user", "gitlab.pat", "gitlab.uri", "gitlab.group",
+            "gitlab.repository", "gitlab.merge.request.id"})
+    void testLastCommitTIME() {
+        var gitLabRepo = gitLabHost.repository(props.get("gitlab.repository")).orElseThrow();
+
+        var pr = gitLabRepo.pullRequest(props.get("gitlab.merge.request.id"));
+        var lastTouchedTime = pr.lastTouchedTime();
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,8 @@ import java.util.logging.*;
 import java.util.regex.Pattern;
 
 class PullRequestBot implements Bot {
+    static final int DEFAULT_WORK_ITEM_BATCH_SIZE = 5;
+
     private final HostedRepository remoteRepo;
     private final HostedRepository censusRepo;
     private final String censusRef;
@@ -58,7 +60,6 @@ class PullRequestBot implements Bot {
     private final String confOverrideName;
     private final String confOverrideRef;
     private final String censusLink;
-    private final Set<String> autoLabelled;
     private final Map<String, HostedRepository> forks;
     private final Set<String> integrators;
     private final Set<Integer> excludeCommitCommentsFrom;
@@ -79,13 +80,15 @@ class PullRequestBot implements Bot {
     private final Map<String, Boolean> initializedPRs = new ConcurrentHashMap<>();
     private final Map<String, String> jCheckConfMap = new HashMap<>();
     private final Map<String, Set<String>> targetRefPRMap = new HashMap<>();
+    private final List<PullRequest> initialPullRequestBacklog = new ArrayList<>();
     private final Approval approval;
     private boolean initialRun = true;
     private final boolean versionMismatchWarning;
     private final boolean cleanCommandEnabled;
     private final boolean checkContributorStatusForBackportCommand;
-
-    private Instant lastFullUpdate;
+    private final List<String> requiredCheckedLines;
+    private final List<TrailerCommand.TrailerConfig> trailerConfigs;
+    private final int workItemBatchSize;
 
     PullRequestBot(HostedRepository repo, HostedRepository censusRepo, String censusRef, LabelConfiguration labelConfiguration,
                    Map<String, String> externalPullRequestCommands, Map<String, String> externalCommitCommands,
@@ -99,7 +102,8 @@ class PullRequestBot implements Bot {
                    boolean reviewCleanBackport, String mlbridgeBotName, MergePullRequestReviewConfiguration reviewMerge, boolean processPR, boolean processCommit,
                    boolean enableMerge, Set<String> mergeSources, boolean jcheckMerge, boolean enableBackport,
                    Map<String, List<PRRecord>> issuePRMap, Approval approval, boolean versionMismatchWarning, boolean cleanCommandEnabled,
-                   boolean checkContributorStatusForBackportCommand) {
+                   boolean checkContributorStatusForBackportCommand, List<String> requiredCheckedLines,
+                   List<TrailerCommand.TrailerConfig> trailerConfigs, int workItemBatchSize) {
         remoteRepo = repo;
         this.censusRepo = censusRepo;
         this.censusRef = censusRef;
@@ -139,12 +143,11 @@ class PullRequestBot implements Bot {
         this.versionMismatchWarning = versionMismatchWarning;
         this.cleanCommandEnabled = cleanCommandEnabled;
         this.checkContributorStatusForBackportCommand = checkContributorStatusForBackportCommand;
+        this.requiredCheckedLines = requiredCheckedLines;
+        this.trailerConfigs = trailerConfigs;
+        this.workItemBatchSize = workItemBatchSize;
 
-        autoLabelled = new HashSet<>();
         poller = new PullRequestPoller(repo, true);
-
-        // Only check recently updated when starting up to avoid congestion
-        lastFullUpdate = Instant.now();
     }
 
     static PullRequestBotBuilder newBuilder() {
@@ -156,12 +159,12 @@ class PullRequestBot implements Bot {
         poller.retryPullRequest(pr, expiresAt);
     }
 
-    private List<WorkItem> getPullRequestWorkItems(List<PullRequest> pullRequests) {
+    private List<WorkItem> getPullRequestWorkItems(List<PullRequest> pullRequests, boolean initialRunItems) {
         var ret = new ArrayList<WorkItem>();
 
         for (var pr : pullRequests) {
             if (pr.state() == Issue.State.OPEN) {
-                if (initialRun) {
+                if (initialRunItems) {
                     ret.add(CheckWorkItem.fromInitialRunOfPRBot(this, pr.id(), e -> poller.retryPullRequest(pr), pr.updatedAt()));
                 } else {
                     ret.add(CheckWorkItem.fromPRBot(this, pr.id(), e -> poller.retryPullRequest(pr), pr.updatedAt()));
@@ -172,9 +175,34 @@ class PullRequestBot implements Bot {
             }
         }
 
-        initialRun = false;
-
         return ret;
+    }
+
+    private synchronized void addToInitialPullRequestBacklog(List<PullRequest> pullRequests) {
+        initialPullRequestBacklog.addAll(pullRequests);
+        initialPullRequestBacklog.sort(Comparator.comparing(PullRequest::updatedAt).reversed());
+    }
+
+    private synchronized int initialPullRequestBacklogSize() {
+        return initialPullRequestBacklog.size();
+    }
+
+    private synchronized List<PullRequest> nextInitialPullRequestBatch(int batchSizeLimit) {
+        var batchSize = Math.min(batchSizeLimit, initialPullRequestBacklog.size());
+        var batch = new ArrayList<>(initialPullRequestBacklog.subList(0, batchSize));
+        initialPullRequestBacklog.subList(0, batchSize).clear();
+        return batch;
+    }
+
+    private void updateTargetRefPRMap(List<PullRequest> pullRequests) {
+        for (var pr : pullRequests) {
+            var targetRef = pr.targetRef();
+            var prId = pr.id();
+            targetRefPRMap.values().forEach(s -> s.remove(prId));
+            if (pr.isOpen()) {
+                targetRefPRMap.computeIfAbsent(targetRef, key -> new HashSet<>()).add(prId);
+            }
+        }
     }
 
     @Override
@@ -185,16 +213,26 @@ class PullRequestBot implements Bot {
         }
         if (processPR) {
             List<PullRequest> prs = poller.updatedPullRequests();
-            workItems.addAll(getPullRequestWorkItems(prs));
+            updateTargetRefPRMap(prs);
+            var currentPullRequestWorkItemCount = 0;
 
-            // Update targetRefPRMap
-            for (var pr : prs) {
-                var targetRef = pr.targetRef();
-                var prId = pr.id();
-                targetRefPRMap.values().forEach(s -> s.remove(prId));
-                if (pr.isOpen()) {
-                    targetRefPRMap.computeIfAbsent(targetRef, key -> new HashSet<>()).add(prId);
-                }
+            if (initialRun) {
+                initialRun = false;
+                var openPullRequests = prs.stream()
+                        .filter(PullRequest::isOpen)
+                        .toList();
+                var closedPullRequests = prs.stream()
+                        .filter(pr -> !pr.isOpen())
+                        .toList();
+                addToInitialPullRequestBacklog(openPullRequests);
+                log.info("Adding " + openPullRequests.size() + " pull requests to the initial backlog for " + remoteRepo.name());
+                var closedPullRequestWorkItems = getPullRequestWorkItems(closedPullRequests, false);
+                workItems.addAll(closedPullRequestWorkItems);
+                currentPullRequestWorkItemCount += closedPullRequestWorkItems.size();
+            } else {
+                var updatedPullRequestWorkItems = getPullRequestWorkItems(prs, false);
+                workItems.addAll(updatedPullRequestWorkItems);
+                currentPullRequestWorkItemCount += updatedPullRequestWorkItems.size();
             }
 
             var activeBranches = remoteRepo.branches().stream()
@@ -212,7 +250,17 @@ class PullRequestBot implements Bot {
                     .filter(pullRequest -> prs.stream()
                             .noneMatch(pr -> pr.isSame(pullRequest)))
                     .toList();
-            workItems.addAll(getPullRequestWorkItems(filteredPrs));
+            var jcheckConfUpdateRelatedWorkItems = getPullRequestWorkItems(filteredPrs, false);
+            workItems.addAll(jcheckConfUpdateRelatedWorkItems);
+            currentPullRequestWorkItemCount += jcheckConfUpdateRelatedWorkItems.size();
+
+            var initialPullRequestBatchSize = Math.max(0, workItemBatchSize - currentPullRequestWorkItemCount);
+            var initialPullRequestBatch = nextInitialPullRequestBatch(initialPullRequestBatchSize);
+            if (!initialPullRequestBatch.isEmpty()) {
+                log.info("Processing " + initialPullRequestBatch.size() + " pull requests from the initial backlog for "
+                        + remoteRepo.name() + ", " + initialPullRequestBacklogSize() + " remaining");
+                workItems.addAll(getPullRequestWorkItems(initialPullRequestBatch, true));
+            }
             poller.lastBatchHandled();
         }
         return workItems;
@@ -260,7 +308,8 @@ class PullRequestBot implements Bot {
             workItems.add(new CommitCommentsWorkItem(this, remoteRepo, excludeCommitCommentsFrom));
         }
         if (processPR) {
-            workItems.addAll(getPullRequestWorkItems(webHook.get().updatedPullRequests()));
+            var updatedPullRequests = webHook.get().updatedPullRequests();
+            workItems.addAll(getPullRequestWorkItems(updatedPullRequests, false));
         }
         return workItems;
     }
@@ -368,20 +417,12 @@ class PullRequestBot implements Bot {
         return forks;
     }
 
-    public boolean isAutoLabelled(PullRequest pr) {
-        synchronized (autoLabelled) {
-            return autoLabelled.contains(pr.id());
-        }
-    }
-
-    public void setAutoLabelled(PullRequest pr) {
-        synchronized (autoLabelled) {
-            autoLabelled.add(pr.id());
-        }
-    }
-
     public boolean reviewCleanBackport() {
         return reviewCleanBackport;
+    }
+
+    public List<String> requiredCheckedLines() {
+        return requiredCheckedLines;
     }
 
     public String mlbridgeBotName() {
@@ -430,6 +471,14 @@ class PullRequestBot implements Bot {
 
     public boolean checkContributorStatusForBackportCommand() {
         return checkContributorStatusForBackportCommand;
+    }
+
+    public List<TrailerCommand.TrailerConfig> trailerConfigs() {
+        return trailerConfigs;
+    }
+
+    public int workItemBatchSize() {
+        return workItemBatchSize;
     }
 
     public void addIssuePRMapping(String issueId, PRRecord prRecord) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ import org.openjdk.skara.issuetracker.Comment;
 
 import java.io.*;
 import java.util.*;
+import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -34,7 +35,7 @@ import static org.openjdk.skara.bots.common.CommandNameEnum.label;
 
 public class LabelCommand implements CommandHandler {
     private final String commandName;
-
+    private static final Logger log = Logger.getLogger("org.openjdk.skara.bots.pr");
     private static final Pattern ARGUMENT_PATTERN = Pattern.compile("(?:(add|remove)\\s+)((?:[A-Za-z0-9_@.-]+[\\s,]*)+)");
     private static final Pattern SHORT_ARGUMENT_PATTERN = Pattern.compile("((?:[-+]?[A-Za-z0-9_@.-]+[\\s,]*)+)");
     private static final Pattern IGNORED_SUFFIXES = Pattern.compile("^(.*)(?:-dev(?:@openjdk.org)?)$");
@@ -71,7 +72,7 @@ public class LabelCommand implements CommandHandler {
         var currentLabels = new HashSet<>(pr.labelNames());
 
         if (argumentMatcher.matches()) {
-            var labels =  Arrays.stream(argumentMatcher.group(2).split("[\\s,]+")).collect(Collectors.toList());
+            var labels = Arrays.stream(argumentMatcher.group(2).split("[\\s,]+")).collect(Collectors.toList());
             if (labels.size() == 0) {
                 showHelp(bot.labelConfiguration(), reply);
                 return;
@@ -82,7 +83,7 @@ public class LabelCommand implements CommandHandler {
                 return;
             }
             if (argumentMatcher.group(1).equals("add")) {
-                addLabels(labels, currentLabels, pr, reply);
+                addLabels(labels, currentLabels, pr, reply, bot);
             } else if (argumentMatcher.group(1).equals("remove")) {
                 removeLabels(labels, currentLabels, pr, reply);
             }
@@ -115,7 +116,7 @@ public class LabelCommand implements CommandHandler {
                 return;
             }
 
-            addLabels(labelsToAdd, currentLabels, pr, reply);
+            addLabels(labelsToAdd, currentLabels, pr, reply, bot);
             removeLabels(labelsToRemove, currentLabels, pr, reply);
         }
     }
@@ -146,10 +147,15 @@ public class LabelCommand implements CommandHandler {
         return invalidLabels;
     }
 
-    private void addLabels(List<String> labelsToAdd,Set<String> currentLabels, PullRequest pr, PrintWriter reply) {
+    /**
+     * Attempts to add each label in labelsToAdd to the pull request.
+     * Updates to currentLabels are performed immediately after each label addition.
+     */
+    private void addLabels(List<String> labelsToAdd, Set<String> currentLabels, PullRequest pr, PrintWriter reply, PullRequestBot bot) {
         for (var label : labelsToAdd) {
             if (!currentLabels.contains(label)) {
                 pr.addLabel(label);
+                currentLabels.add(label);
                 reply.println(LabelTracker.addLabelMarker(label));
                 reply.println("The `" + label + "` label was successfully added.");
             } else {
@@ -158,10 +164,15 @@ public class LabelCommand implements CommandHandler {
         }
     }
 
+    /**
+     * Attempts to remove each label in labelsToRemove from the pull request.
+     * Updates to currentLabels are performed immediately after each label removal.
+     */
     private void removeLabels(List<String> labelsToRemove,Set<String> currentLabels, PullRequest pr, PrintWriter reply) {
         for (var label : labelsToRemove) {
             if (currentLabels.contains(label)) {
                 pr.removeLabel(label);
+                currentLabels.remove(label);
                 reply.println(LabelTracker.removeLabelMarker(label));
                 reply.println("The `" + label + "` label was successfully removed.");
             } else {
