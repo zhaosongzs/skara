@@ -596,7 +596,7 @@ class IssueNotifier implements Notifier, PullRequestListener, RepositoryListener
         log.info("PR title:" + pr.title());
         if (!backportCreated && pr.title().contains("Test SKARA")) {
             log.info("Preparing to create backport");
-            var issue = issueProject.issue("8361435");
+            var issue = issueProject.issue("8378488");
             Backports.createBackport(issue.get(), "22", null, null);
             backportCreated = true;
         }
