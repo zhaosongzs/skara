@@ -196,16 +196,12 @@ public class MailingListBridgeBotBuilder {
     }
 
     public MailingListBridgeBot build() {
-        var effectiveArchiveFileReader = archiveFileReader;
-        if (effectiveArchiveFileReader == null && seedStorage != null) {
-            effectiveArchiveFileReader = new ArchiveFileReader(archive, archiveRef, seedStorage);
-        }
         return new MailingListBridgeBot(from, repo, archive, archiveRef, censusRepo, censusRef, lists,
                                         ignoredUsers, ignoredComments,
                                         webrevStorageHTMLRepository, webrevStorageJSONRepository, webrevStorageRef,
                                         webrevStorageBase, webrevStorageBaseUri, webrevGenerateHTML, webrevGenerateJSON,
                                         readyLabels, readyComments, issueTracker, headers,
-                                        cooldown, repoInSubject, branchInSubject, seedStorage, effectiveArchiveFileReader,
+                                        cooldown, repoInSubject, branchInSubject, seedStorage, archiveFileReader,
                                         mailingListServer);
     }
 }
