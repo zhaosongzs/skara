@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,6 +53,7 @@ public class MailingListBridgeBot implements Bot {
     private final boolean repoInSubject;
     private final Pattern branchInSubject;
     private final Path seedStorage;
+    private final ArchiveFileReader archiveFileReader;
     private final PullRequestPoller poller;
     private final MailingListServer mailingListServer;
 
@@ -68,7 +69,7 @@ public class MailingListBridgeBot implements Bot {
                          boolean webrevGenerateHTML, boolean webrevGenerateJSON, Set<String> readyLabels,
                          Map<String, Pattern> readyComments, URI issueTracker, Map<String, String> headers,
                          Duration cooldown, boolean repoInSubject, Pattern branchInSubject,
-                         Path seedStorage, MailingListServer mailingListServer) {
+                         Path seedStorage, ArchiveFileReader archiveFileReader, MailingListServer mailingListServer) {
         emailAddress = from;
         codeRepo = repo;
         archiveRepo = archive;
@@ -86,6 +87,7 @@ public class MailingListBridgeBot implements Bot {
         this.repoInSubject = repoInSubject;
         this.branchInSubject = branchInSubject;
         this.seedStorage = seedStorage;
+        this.archiveFileReader = archiveFileReader;
         this.mailingListServer = mailingListServer;
 
         webrevStorage = new WebrevStorage(webrevStorageHTMLRepository, webrevStorageJSONRepository, webrevStorageRef,
@@ -108,6 +110,13 @@ public class MailingListBridgeBot implements Bot {
 
     String archiveRef() {
         return archiveRef;
+    }
+
+    Optional<String> archiveFileContents(String filename) {
+        if (archiveFileReader == null) {
+            return archiveRepo.fileContents(filename, archiveRef);
+        }
+        return archiveFileReader.fileContents(filename);
     }
 
     HostedRepository censusRepo() {

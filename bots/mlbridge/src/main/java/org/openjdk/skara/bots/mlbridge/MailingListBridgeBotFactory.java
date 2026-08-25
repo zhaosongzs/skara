@@ -100,6 +100,8 @@ public class MailingListBridgeBotFactory implements BotFactory {
 
         var archiveRepo = configuration.repository(specific.get("archive").asString());
         var archiveRef = configuration.repositoryRef(specific.get("archive").asString());
+        var seedStorage = configuration.storageFolder().resolve("seeds");
+        var archiveFileReader = new ArchiveFileReader(archiveRepo, archiveRef, seedStorage);
         var globalIssueTracker = URIBuilder.base(specific.get("issues").asString()).build();
 
         var readyLabels = specific.get("ready").get("labels").stream()
@@ -182,7 +184,8 @@ public class MailingListBridgeBotFactory implements BotFactory {
                                                  .issueTracker(issueTracker)
                                                  .headers(headers)
                                                  .cooldown(cooldown)
-                                                 .seedStorage(configuration.storageFolder().resolve("seeds"))
+                                                 .seedStorage(seedStorage)
+                                                 .archiveFileReader(archiveFileReader)
                                                  .mailingListServer(mailmanServer);
 
             if (repoConfig.contains("reponame")) {

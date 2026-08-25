@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -291,7 +291,7 @@ class ArchiveWorkItem implements WorkItem {
 
         var sentMails = new ArrayList<Email>();
         // Load in already sent emails from the archive, if there are any.
-        var archiveContents = bot.archiveRepo().fileContents(mboxFile(), bot.archiveRef());
+        var archiveContents = bot.archiveFileContents(mboxFile());
         archiveContents.ifPresent(s -> sentMails.addAll(Mbox.splitMbox(s, bot.emailAddress())));
 
         var labels = new HashSet<>(pr.labelNames());

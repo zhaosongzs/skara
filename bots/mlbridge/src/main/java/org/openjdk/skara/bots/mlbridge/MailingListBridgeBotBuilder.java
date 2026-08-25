@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,6 +59,7 @@ public class MailingListBridgeBotBuilder {
     private boolean repoInSubject = false;
     private Pattern branchInSubject = Pattern.compile("a^"); // Does not match anything
     private Path seedStorage = null;
+    private ArchiveFileReader archiveFileReader = null;
     private MailingListServer mailingListServer;
 
     MailingListBridgeBotBuilder() {
@@ -184,17 +185,27 @@ public class MailingListBridgeBotBuilder {
         return this;
     }
 
+    MailingListBridgeBotBuilder archiveFileReader(ArchiveFileReader archiveFileReader) {
+        this.archiveFileReader = archiveFileReader;
+        return this;
+    }
+
     public MailingListBridgeBotBuilder mailingListServer(MailingListServer mailingListServer) {
         this.mailingListServer = mailingListServer;
         return this;
     }
 
     public MailingListBridgeBot build() {
+        var effectiveArchiveFileReader = archiveFileReader;
+        if (effectiveArchiveFileReader == null && seedStorage != null) {
+            effectiveArchiveFileReader = new ArchiveFileReader(archive, archiveRef, seedStorage);
+        }
         return new MailingListBridgeBot(from, repo, archive, archiveRef, censusRepo, censusRef, lists,
                                         ignoredUsers, ignoredComments,
                                         webrevStorageHTMLRepository, webrevStorageJSONRepository, webrevStorageRef,
                                         webrevStorageBase, webrevStorageBaseUri, webrevGenerateHTML, webrevGenerateJSON,
                                         readyLabels, readyComments, issueTracker, headers,
-                                        cooldown, repoInSubject, branchInSubject, seedStorage, mailingListServer);
+                                        cooldown, repoInSubject, branchInSubject, seedStorage, effectiveArchiveFileReader,
+                                        mailingListServer);
     }
 }
