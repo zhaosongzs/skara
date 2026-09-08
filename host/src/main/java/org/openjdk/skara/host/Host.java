@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,20 @@
 package org.openjdk.skara.host;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 public interface Host {
     boolean isValid();
     Optional<HostUser> user(String username);
+
+    /**
+     * Finds users matching a query, if supported by the host.
+     */
+    default List<HostUser> searchUsers(String query) {
+        return List.of();
+    }
+
     HostUser currentUser();
     boolean isMemberOf(String groupId, HostUser user);
     String hostname();

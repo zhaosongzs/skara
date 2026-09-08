@@ -190,6 +190,24 @@ public class JiraHost implements IssueTracker {
     }
 
     @Override
+    public List<HostUser> searchUsers(String query) {
+        var data = request.get("user/search")
+                .param("username", query)
+                .execute();
+
+        return data.stream()
+                .map(JSONValue::asObject)
+                .map(user -> HostUser.builder()
+                        .id(user.get("name").asString())
+                        .username(user.get("name").asString())
+                        .fullName(user.get("displayName").asString())
+                        .email(user.contains("emailAddress") ? user.get("emailAddress").asString() : null)
+                        .active(user.get("active").asBoolean())
+                        .build())
+                .toList();
+    }
+
+    @Override
     public HostUser currentUser() {
         if (currentUser == null) {
             var data = request.get("myself").execute();

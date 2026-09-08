@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -127,5 +127,21 @@ class JiraIntegrationTests {
         issue = project.issue(issueId).orElseThrow();
         assertTrue(issue.resolution().isPresent());
         assertEquals("Fixed", issue.resolution().get());
+    }
+
+    @Test
+    @EnabledIfTestProperties({"jira.uri", "jira.pat"})
+    void testSearchUsersByEmail() {
+        var currentUser = tracker.currentUser();
+        var email = currentUser.email().orElseThrow();
+        var user = tracker.searchUsers(email).stream()
+                .filter(candidate -> candidate.email().map(email::equalsIgnoreCase).orElse(false))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(currentUser.id(), user.id());
+        assertEquals(currentUser.username(), user.username());
+        assertEquals(currentUser.fullName(), user.fullName());
+        assertEquals(currentUser.email(), user.email());
+        assertEquals(currentUser.active(), user.active());
     }
 }

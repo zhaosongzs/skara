@@ -288,6 +288,18 @@ public class TestHost implements Forge, IssueTracker {
     }
 
     @Override
+    public List<HostUser> searchUsers(String query) {
+        var normalizedQuery = query.toLowerCase(Locale.ROOT);
+        return data.users.stream()
+                .filter(user -> user.username().toLowerCase(Locale.ROOT).contains(normalizedQuery) ||
+                        user.fullName().toLowerCase(Locale.ROOT).contains(normalizedQuery) ||
+                        user.email().map(email -> email.toLowerCase(Locale.ROOT)
+                                        .contains(normalizedQuery))
+                                .orElse(false))
+                .toList();
+    }
+
+    @Override
     public HostUser currentUser() {
         return data.users.get(currentUser);
     }
