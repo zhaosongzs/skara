@@ -34,7 +34,7 @@ public interface Host {
      * Finds users matching a query, if supported by the host.
      */
     default List<HostUser> searchUsers(String query) {
-        return List.of();
+        throw new UnsupportedOperationException();
     }
 
     HostUser currentUser();
